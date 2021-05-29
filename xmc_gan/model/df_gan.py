@@ -136,13 +136,13 @@ class D_GET_LOGITS(nn.Module):
             conv2d_nxn(in_dim = ndf * 2, out_dim = 1, kernel_size = 4, stride = 1, padding = 0, bias=False, spec_norm = spec_norm),
         )
 
-    def forward(self, out, sent_embs, **kwargs):
+    def forward(self, x, sent_embs, **kwargs):
         
         c = sent_embs.view(sent_embs.size(0), -1, 1, 1)
         c = c.repeat(1, 1, 4, 4)
-        h_c_code = torch.cat((out, c), 1)
-        out = self.joint_conv(h_c_code)
-        return out
+        h_c_code = torch.cat((x, c), 1)
+        match = self.joint_conv(h_c_code)
+        return [match]
 
 
 class G_Block(nn.Module):

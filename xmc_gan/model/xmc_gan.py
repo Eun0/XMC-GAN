@@ -111,71 +111,6 @@ class NetG(nn.Module):
         return out
 
 
-class NetD(nn.Module):
-    def __init__(self, cfg, **kwargs):
-        super(NetD, self).__init__()
-        ndf = cfg.TRAIN.NCH
-        spec_norm = cfg.DISC.SPEC_NORM
-
-        arch = disc_arch(img_size = cfg.IMG.SIZE, nch = ndf)
-
-        self.conv_img = conv2d_nxn(in_dim = arch['in_channels'][0], out_dim = arch['out_channels'][0], kernel_size = 3, stride = 1, padding = 1, spec_norm= spec_norm)
-
-        self.downblocks = nn.ModuleList(
-
-            [ResBlockDown(in_dim = arch['in_channels'][i],
-                  out_dim = arch['out_channels'][i],
-                  downsample = arch['downsample'][i],
-                  spec_norm = spec_norm) for i in range(1,arch['depth'])]
-        )
-        
-        self.COND_DNET = PROJD_GET_LOGITS(in_dim = arch['out_channels'][-1], text_dim = cfg.TEXT.EMBEDDING_DIM, uncond=cfg.DISC.UNCOND, spec_norm = spec_norm)
-
-    def forward(self, x, **kwargs):
-
-        out = self.conv_img(x)
-
-        for block in self.downblocks:
-            out = block(out)
-        
-        return out
-
-class PROJD_GET_LOGITS(nn.Module):
-    def __init__(self, in_dim, text_dim, uncond, spec_norm = True):
-        super(PROJD_GET_LOGITS, self).__init__()
-        
-        self.uncond = uncond
-        # GSP
-        #self.pool = nn.AvgPool2d(kernel_size=4, divisor_override=1)
-        self.pool = nn.AvgPool2d(kernel_size=4)
-        self.proj_match = linear(text_dim, in_dim, spec_norm=spec_norm)
-        if self.uncond:
-            self.proj_logit = linear(in_dim, 1, spec_norm=spec_norm)
-
-    def forward(self, out, sent_embs, detach=False, **kwargs):
-        # sent_embs [bs, text_dim]
-        out = self.pool(out) # [bs, in_dim, 1, 1]
-        out = out.view(out.size(0),-1) # [bs, in_dim]
-
-        sent_embs = self.proj_match(sent_embs) # [bs, in_dim]
-
-        if self.uncond:
-            out_norm = F.normalize(out, p=2, dim=1) # [bs, in_dim]
-            sent_embs_norm = F.normalize(sent_embs, p=2, dim=1)
-        else:
-            out_norm = out
-            sent_embs_norm = sent_embs
-        match = torch.einsum('be,be->b', out_norm, sent_embs_norm)
-
-        if self.uncond:
-            if detach:
-                out = out.detach()
-            logit = self.proj_logit(out)
-            logit = logit.view(-1)
-            match += logit
-
-        return match
-
 
 class ResBlockUp(nn.Module):
 
@@ -203,9 +138,7 @@ class ResBlockUp(nn.Module):
         
         out = self.residual(x, global_cond)
         out += self.shortcut(x)
-
         return out 
-
 
     def shortcut(self, x):
         if self.upsample:
@@ -334,6 +267,77 @@ class AttnResBlockUp(nn.Module):
         out = self.c2(out) # [bs, c_out, h', w']
 
         return out
+
+
+class NetD(nn.Module):
+    def __init__(self, cfg, **kwargs):
+        super(NetD, self).__init__()
+        ndf = cfg.TRAIN.NCH
+        spec_norm = cfg.DISC.SPEC_NORM
+
+        arch = disc_arch(img_size = cfg.IMG.SIZE, nch = ndf)
+
+        self.conv_img = conv2d_nxn(in_dim = arch['in_channels'][0], out_dim = arch['out_channels'][0], kernel_size = 3, stride = 1, padding = 1, spec_norm= spec_norm)
+
+        self.downblocks = nn.ModuleList(
+
+            [ResBlockDown(in_dim = arch['in_channels'][i],
+                  out_dim = arch['out_channels'][i],
+                  downsample = arch['downsample'][i],
+                  spec_norm = spec_norm) for i in range(1,arch['depth'])]
+        )
+        
+        self.COND_DNET = PROJD_GET_LOGITS(in_dim = arch['out_channels'][-1], text_dim = cfg.TEXT.EMBEDDING_DIM, uncond=cfg.DISC.UNCOND, spec_norm = spec_norm)
+
+    def forward(self, x, **kwargs):
+
+        out = self.conv_img(x)
+
+        for block in self.downblocks:
+            out = block(out)
+        
+        return out
+
+class PROJD_GET_LOGITS(nn.Module):
+    def __init__(self, in_dim, text_dim, uncond, spec_norm = True):
+        super(PROJD_GET_LOGITS, self).__init__()
+        
+        self.uncond = uncond
+        # GSP
+        #self.pool = nn.AvgPool2d(kernel_size=4, divisor_override=1)
+        self.pool = nn.AvgPool2d(kernel_size=4)
+        self.proj_match = linear(text_dim, in_dim, spec_norm=spec_norm)
+        if self.uncond:
+            self.proj_logit = linear(in_dim, 1, spec_norm=spec_norm)
+
+    def get_dsent_embs(self, sent_embs):
+        dsent_embs = self.proj_match(sent_embs)
+        return dsent_embs
+
+    def forward(self, out, sent_embs, **kwargs):
+        # sent_embs [bs, text_dim]
+        out = self.pool(out) # [bs, in_dim, 1, 1]
+        out = out.view(out.size(0),-1) # [bs, in_dim]
+
+        #sent_embs = self.proj_match(sent_embs) # [bs, in_dim]
+
+        #if self.uncond:
+        #    out_norm = F.normalize(out, p=2, dim=1) # [bs, in_dim]
+        #    sent_embs_norm = F.normalize(sent_embs, p=2, dim=1)
+        #else:
+        #    out_norm = out
+        #    sent_embs_norm = sent_embs
+        
+        match = torch.einsum('be,be->b', out, sent_embs)
+
+        if self.uncond:
+            logit = self.proj_logit(out)
+            logit = logit.view(-1)
+            match += logit
+
+        return [match, out]
+
+
 
 class ResBlockDown(nn.Module):
 
