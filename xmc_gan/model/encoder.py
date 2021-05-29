@@ -1,7 +1,73 @@
+import os
+from sentence_transformers import SentenceTransformer
 import torch 
 import torch.nn as nn
+import torch.nn.functional as F
 
-from torch.nn.uitls.rnn import pack_padded_sequence, pad_packed_sequence
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+
+
+def batch_to_cuda(batch):
+    for key in batch:
+        if isinstance(batch[key],torch.Tensor):
+            batch[key] = batch[key].cuda()
+    return batch
+
+def words_pooling(words_embs, sum_mask, mode='MEAN'):
+    if mode == 'MEAN':
+        sum_embeddings = torch.sum(words_embs, 1)
+        sent_emb = sum_embeddings / sum_mask 
+    else:
+        raise NotImplementedError()
+
+    return sent_emb
+
+class SBERT_ENCODER(nn.Module):
+    def __init__(self, cfg):
+        super(SBERT_ENCODER, self).__init__()
+        os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+        self.bert_norm = cfg.TEXT.BERT_NORM
+        self.pooling_mode = cfg.TEXT.POOLING_MODE
+        self.max_seq_length = cfg.TEXT.MAX_LENGTH
+        self._define_modules()
+
+    def _define_modules(self):
+        self.bert = SentenceTransformer('stsb-roberta-base')
+        self.bert.eval()
+        self.bert.max_seq_length = self.max_seq_length
+        print('SBERT ENCODER')
+
+    @torch.no_grad()
+    def forward(self, sents, sent_lens):
+        sorted_sent_lens, sorted_idx = sent_lens.sort(descending=True)
+        sorted_sents = [sents[idx] for idx in sorted_idx]
+
+        features = self.bert.tokenize(sorted_sents)
+        features = batch_to_cuda(features)
+
+        output_features = self.bert(features)
+
+        embeddings = output_features['token_embeddings']
+
+        attn_mask = output_features['attention_mask']
+        attn_mask_expanded = attn_mask.unsqueeze(-1).expand(embeddings.size()).float()
+
+        embeddings = embeddings * attn_mask_expanded
+
+        words_embs = embeddings[sorted_idx.argsort()]
+        attn_mask = attn_mask[sorted_idx.argsort()]
+
+        sum_mask = attn_mask.unsqueeze(-1).sum(1)
+        mask = (attn_mask == 0)
+
+        sent_embs = words_pooling(words_embs = words_embs, sum_mask = sum_mask, mode = self.pooling_mode)
+
+        if self.bert_norm:
+            sent_embs = F.normalize(sent_embs, p=2, dim=1)
+
+        words_embs = words_embs.transpose(1,2) # [bs, text_dim, T]
+
+        return words_embs, sent_embs, mask
 
 
 class RNN_ENCODER(nn.Module):
@@ -68,8 +134,8 @@ class RNN_ENCODER(nn.Module):
         sorted_embs = pack_padded_sequence(sorted_embs, sorted_cap_lens, batch_first = True)
         sorted_outputs, sorted_hiddens = self.rnn(sorted_embs, hiddens)
 
-        #sorted_outputs = pad_packed_sequence(sorted_outputs, batch_first= True, total_length = self.n_steps)[0]
-        sorted_outputs = pad_packed_sequence(sorted_outputs, batch_first= True)[0]
+        sorted_outputs = pad_packed_sequence(sorted_outputs, batch_first= True, total_length = self.n_steps)[0]
+        #sorted_outputs = pad_packed_sequence(sorted_outputs, batch_first= True)[0]
 
         sorted_words_embs = sorted_outputs.transpose(1,2)
 
