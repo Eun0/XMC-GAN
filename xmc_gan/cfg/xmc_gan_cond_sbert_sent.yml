@@ -1,4 +1,4 @@
-CONFIG_NAME: 'XMC_GAN_COND'
+CONFIG_NAME: 'XMC_GAN_COND_SBERT_SENT'
 DATASET_NAME: 'coco'
 
 TRAIN:
@@ -17,7 +17,7 @@ TRAIN:
 
   ENCODER_LOSS:
     B_GLOBAL: False
-    SENT: False
+    SENT: True
     WORD: False
     DISC: False
     VGG: False
@@ -44,21 +44,21 @@ IMG:
   SIZE: 64
 
 TEXT:
-  TYPE: 'WORD' #'WORD' # 'SENT'
+  TYPE: 'SENT' #'WORD' # 'SENT'
   CAPTIONS_PER_IMAGE: 5
   MAX_LENGTH: 15
   VOCA_SIZE: 27297
 
-  ENCODER_NAME: 'RNN' #'RNN' # 'BERT'
-  ENCODER_DIR: 'data/DAMSMencoders/coco/text_encoder100.pth'       #'data/DAMSMencoders/coco/text_encoder100.pth'
-  EMBEDDING_DIM: 256
+  ENCODER_NAME: 'SBERT' #'RNN' # 'BERT'
+  ENCODER_DIR: ''       #'data/DAMSMencoders/coco/text_encoder100.pth'
+  EMBEDDING_DIM: 768
   NUM_LAYERS: 1
-  RNN_TYPE: 'LSTM'
+  #RNN_TYPE: 'LSTM'
 
   # if use bert text encoder
-  #FIX_BERT: True
-  #BERT_NORM: False
-  #POOLING_MODE: 'MEAN'
+  FIX_BERT: True
+  BERT_NORM: False
+  POOLING_MODE: 'MEAN'
   #SENT_FT: False
   #WORD_FT: False
   #JOINT_FT: False
