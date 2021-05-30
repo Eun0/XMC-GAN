@@ -9,9 +9,7 @@ sys.path.append(PROJ_DIR)
 import argparse
 import random
 
-#import wandb
-from torch.utils.tensorboard import SummaryWriter
-
+import wandb 
 import numpy as np
 from PIL import Image
 import torch
@@ -25,7 +23,7 @@ from xmc_gan.config.gan import cfg, cfg_from_file
 from xmc_gan.dataset import WordTextDataset, SentTextDataset, index_to_sent 
 from xmc_gan.model.encoder import RNN_ENCODER, SBERT_ENCODER
 from xmc_gan.model.xmc_gan import NetG as XMC_GEN, NetD as XMC_DISC
-from xmc_gan.model.df_gan import NetG as DF_GEN, NetD as DF_DISC
+from xmc_gan.model.df_gan import NetG as DF_GEN, NetD as DF_DISC 
 from xmc_gan.model.xmc_gan_proj_text import OutNetG as XMC_PROJT_OUT_GEN, InNetG as XMC_PROJT_IN_GEN
 from xmc_gan.utils.logger import setup_logger
 from xmc_gan.utils.miscc import count_params
@@ -42,8 +40,8 @@ _DISC_ARCH = {"XMC_DISC":XMC_DISC, "DF_DISC":DF_DISC, }
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train XMC-GAN')
-    parser.add_argument('--cfg',type=str,default='xmc_gan/cfg/xmc_gan_projt_in_cond_sbert.yml')
-    parser.add_argument('--gpu',dest = 'gpu_id', type=int, default=3)
+    parser.add_argument('--cfg',type=str,default='xmc_gan/cfg/xmc_gan_cond_sbert_sent.yml')
+    parser.add_argument('--gpu',dest = 'gpu_id', type=int,default=1)
     parser.add_argument('--seed',type=int,default=100)
     parser.add_argument('--resume_epoch',type=int,default=0)
     args = parser.parse_args()
@@ -96,8 +94,8 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
 
     vutils.save_image(imgs.data, f'{img_dir}/imgs.png', normalize=True, scale_each=True)
 
-    #wandb.watch(netG,log_freq=cfg.TRAIN.LOG_INTERVAL)
-    #wandb.watch(netD,log_freq=cfg.TRAIN.LOG_INTERVAL)
+    wandb.watch(netG,log_freq=cfg.TRAIN.LOG_INTERVAL)
+    wandb.watch(netD,log_freq=cfg.TRAIN.LOG_INTERVAL)
 
     i = 0
     log_dict = {}
@@ -233,16 +231,17 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
                 
             
         
-        writer.add_scalar('epoch', epoch, epoch)
-        writer.add_scalar('Loss_D',errD.item(), epoch)
-        writer.add_scalar('Loss_G',errG.item(), epoch)
-        writer.add_scalar('errD_real',errD_real.item(), epoch)
-        writer.add_scalar('errD_fake',errD_fake.item(), epoch)
-        writer.add_scalar('errD_mismatch',errD_mismatch.item(), epoch) if cfg.TRAIN.RMIS_LOSS else None
-        writer.add_scalar('ds_loss',ds_loss.item(), epoch) if cfg.TRAIN.ENCODER_LOSS.SENT else None
-        writer.add_scalar('gs_loss',gs_loss.item(), epoch) if cfg.TRAIN.ENCODER_LOSS.SENT else None
+        log_dict.clear()
+        log_dict.update({'epoch':epoch})
+        log_dict.update({'Loss_D':errD.item()})
+        log_dict.update({'Loss_G':errG.item()})
+        log_dict.update({'errD_real':errD_real.item()})
+        log_dict.update({'errD_fake':errD_fake.item()})
+        log_dict.update({'errD_mismatch':errD_mismatch.item()}) if cfg.TRAIN.RMIS_LOSS else None
+        log_dict.update({'ds_loss':ds_loss.item()}) if cfg.TRAIN.ENCODER_LOSS.SENT else None
+        log_dict.update({'gs_loss':gs_loss.item()}) if cfg.TRAIN.ENCODER_LOSS.SENT else None
         
-        #wandb.log(log_dict)
+        wandb.log(log_dict)
         
         torch.save(netG.state_dict(),f'{model_dir}/netG_{epoch:03d}.pth')
         torch.save(netD.state_dict(),f'{model_dir}/netD_{epoch:03d}.pth')
@@ -255,7 +254,7 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             fake = netG(fixed_noise, fixed_sents, words_embs = fixed_words, mask = fixed_masks)
             vutils.save_image(fake.data,f'{img_dir}/fake_samples_epoch_{epoch:03d}.png',normalize=True,scale_each=True)
 
-        eval(loader = test_loader, state_epoch = epoch, text_encoder = text_encoder, netG = netG, logger = logger, num_samples=6000)
+        eval(loader = test_loader, state_epoch = state_epoch, text_encoder = text_encoder, netG = netG, logger = logger, num_samples=6000)
 
 
 
@@ -312,8 +311,7 @@ def eval(loader, state_epoch, text_encoder, netG, logger, num_samples = 6000):
     
     fid_score = calculate_fid_given_paths([org_dir,save_dir], batch_size = 100, device = torch.device('cuda'), dims = 2048)
     logger.info(f' epoch {state_epoch}, FID : {fid_score}')
-    writer.add_scalar('FID', fid_score, state_epoch)
-    #wandb.log({"FID":fid_score})
+    wandb.log({"FID":fid_score})
 
 
 
@@ -329,7 +327,7 @@ if __name__ == '__main__':
     torch.cuda.manual_seed_all(args.seed)
 
     output_dir = f'{PROJ_DIR}/output/{cfg.DATASET_NAME}_{cfg.CONFIG_NAME}_{args.seed}'
-    #wandb.init(project = f'{cfg.DATASET_NAME}_XMC_GAN_bs{cfg.TRAIN.BATCH_SIZE}', config = cfg)
+    wandb.init(project = f'{cfg.DATASET_NAME}_XMC_GAN_bs{cfg.TRAIN.BATCH_SIZE}', config = cfg)
 
     img_dir = output_dir + '/img'
     log_dir = output_dir + '/log'
@@ -342,8 +340,6 @@ if __name__ == '__main__':
 
     torch.cuda.set_device(args.gpu_id)
     torch.backends.cudnn.benchmark = True
-
-    writer = SummaryWriter(log_dir = log_dir)
 
     logger = setup_logger(name = cfg.CONFIG_NAME, save_dir = log_dir, distributed_rank = 0)
     logger.info('Using config:')
