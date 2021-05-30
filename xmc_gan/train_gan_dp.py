@@ -2,8 +2,10 @@
 import os 
 import sys
 
+print('train_gan_dp')
 
 PROJ_DIR = os.path.abspath(os.path.realpath(__file__).split('xmc_gan/'+os.path.basename(__file__))[0])
+print(PROJ_DIR)
 sys.path.append(PROJ_DIR)
 
 import argparse
@@ -128,12 +130,12 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
 
             #### Train Discriminator
             if cfg.DISC.SENT_MATCH:
-                dsent_embs = netD.COND_DNET.get_dsent_embs(sent_embs)
+                dsent_embs = netD.module.COND_DNET.get_dsent_embs(sent_embs)
             else:
                 dsent_embs = sent_embs
 
             real_features = netD(imgs)
-            outputs_real = netD.COND_DNET(real_features, sent_embs = dsent_embs)
+            outputs_real = netD.module.COND_DNET(real_features, sent_embs = dsent_embs)
             errD_real = torch.nn.ReLU()(1.0 - outputs_real[0]).mean()
             
         
@@ -143,12 +145,12 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
 
             fake_features = netD(fake.detach())
 
-            outputs_fake = netD.COND_DNET(fake_features,sent_embs = dsent_embs)
+            outputs_fake = netD.module.COND_DNET(fake_features,sent_embs = dsent_embs)
             errD_fake = torch.nn.ReLU()(1.0 + outputs_fake[0]).mean()
             mis_loss = errD_fake
             
             if cfg.TRAIN.RMIS_LOSS:
-                outputs_mis = netD.COND_DNET(real_features[:(batch_size-1)], sent_embs = dsent_embs[1:batch_size])
+                outputs_mis = netD.module.COND_DNET(real_features[:(batch_size-1)], sent_embs = dsent_embs[1:batch_size])
                 errD_mismatch = torch.nn.ReLU()(1.0 + outputs_mis[0]).mean()
                 mis_loss += errD_mismatch
             
@@ -178,7 +180,7 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
                 interpolated = (imgs.data).requires_grad_()
                 sent_inter = (sent_embs.data).requires_grad_()
                 features = netD(interpolated)
-                out = netD.COND_DNET(features,sent_inter)
+                out = netD.module.COND_DNET(features,sent_inter)
                 grads = torch.autograd.grad(outputs=out[0],
                                         inputs=(interpolated,sent_inter),
                                         grad_outputs=torch.ones(out[0].size()).cuda(),
@@ -200,11 +202,11 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             ###### Train Generator            
             if i%2 == 0:
                 if cfg.DISC.SENT_MATCH:
-                    dsent_embs = netD.COND_DNET.get_dsent_embs(sent_embs)
+                    dsent_embs = netD.module.COND_DNET.get_dsent_embs(sent_embs)
                 else:
                     dsent_embs = sent_embs
                 features = netD(fake)
-                outputs = netD.COND_DNET(features, sent_embs = dsent_embs)
+                outputs = netD.module.COND_DNET(features, sent_embs = dsent_embs)
                 errG_fake = - outputs[0].mean()
                 
                 enc_loss = 0.0
@@ -240,21 +242,30 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
                 
             
         if args.local_rank == 0:
-            log_dict.clear()
-            log_dict.update({'epoch':epoch})
-            log_dict.update({'Loss_D':errD.item()})
-            log_dict.update({'Loss_G':errG.item()})
-            log_dict.update({'errD_real':errD_real.item()})
-            log_dict.update({'errD_fake':errD_fake.item()})
-            log_dict.update({'errD_mismatch':errD_mismatch.item()}) if cfg.TRAIN.RMIS_LOSS else None
-            log_dict.update({'ds_loss':ds_loss.item()}) if cfg.TRAIN.ENCODER_LOSS.SENT else None
-            log_dict.update({'gs_loss':gs_loss.item()}) if cfg.TRAIN.ENCODER_LOSS.SENT else None
+            #log_dict.clear()
+            #log_dict.update({'epoch':epoch})
+            #log_dict.update({'Loss_D':errD.item()})
+            #log_dict.update({'Loss_G':errG.item()})
+            # log_dict.update({'errD_real':errD_real.item()})
+            # log_dict.update({'errD_fake':errD_fake.item()})
+            # log_dict.update({'errD_mismatch':errD_mismatch.item()}) if cfg.TRAIN.RMIS_LOSS else None
+            # log_dict.update({'ds_loss':ds_loss.item()}) if cfg.TRAIN.ENCODER_LOSS.SENT else None
+            # log_dict.update({'gs_loss':gs_loss.item()}) if cfg.TRAIN.ENCODER_LOSS.SENT else None
             
+            writer.add_scalar('epoch', epoch, epoch)
+            writer.add_scalar('Loss_D',errD.item(), epoch)
+            writer.add_scalar('Loss_G',errG.item(), epoch)
+            writer.add_scalar('errD_real',errD_real.item(), epoch)
+            writer.add_scalar('errD_fake',errD_fake.item(), epoch)
+            writer.add_scalar('errD_mismatch',errD_mismatch.item(), epoch) if cfg.TRAIN.RMIS_LOSS else None
+            writer.add_scalar('ds_loss',ds_loss.item(), epoch) if cfg.TRAIN.ENCODER_LOSS.SENT else None
+            
+             
             #wandb.log(log_dict)
             
-            torch.save(netG.state_dict(),f'{model_dir}/netG_{epoch:03d}.pth')
+            torch.save(netG.module.state_dict(),f'{model_dir}/netG_{epoch:03d}.pth')
             logger.info(f'Save Generator')
-            torch.save(netD.state_dict(),f'{model_dir}/netD_{epoch:03d}.pth')
+            torch.save(netD.module.state_dict(),f'{model_dir}/netD_{epoch:03d}.pth')
             logger.info(f'Save Discriminator')
             torch.save(optimizerG.state_dict(),f'{model_dir}/optimizerG.pth')
             logger.info(f'Save optG')
@@ -266,7 +277,7 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
                 fake = netG(fixed_noise, fixed_sents, words_embs = fixed_words, mask = fixed_masks)
                 vutils.save_image(fake.data,f'{img_dir}/fake_samples_epoch_{epoch:03d}.png',normalize=True,scale_each=True)
 
-            eval(loader = test_loader, state_epoch = state_epoch, text_encoder = text_encoder, netG = netG, logger = logger, num_samples=6000)
+            eval(loader = test_loader, state_epoch = epoch, text_encoder = text_encoder, netG = netG, logger = logger, num_samples=6000)
 
 
 
@@ -321,8 +332,9 @@ def eval(loader, state_epoch, text_encoder, netG, logger, num_samples = 6000):
             break 
     
     fid_score = calculate_fid_given_paths([org_dir,save_dir], batch_size = 100, device = torch.device('cuda'), dims = 2048)
-    args.local_rank == 0:
+    
     logger.info(f' epoch {state_epoch}, FID : {fid_score}')
+    writer.add_scalar('FID', fid_score, state_epoch)
     #wandb.log({"FID":fid_score})
 
 
@@ -330,6 +342,7 @@ def eval(loader, state_epoch, text_encoder, netG, logger, num_samples = 6000):
 
 if __name__ == '__main__':
 
+    print(f'Start learning')
     args = parse_args()
     cfg_from_file(args.cfg)
     
@@ -339,19 +352,19 @@ if __name__ == '__main__':
     torch.cuda.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
-    distributed = False
-    if 'WORLD_SIZE' in os.environ:
-        distributed = int(os.environ['WORLD_SIZE']) > 1
+    distributed = True
+    #if 'WORLD_SIZE' in os.environ:
+    #    distributed = int(os.environ['WORLD_SIZE']) > 1
 
     gpu = args.gpu_id
     world_size = 1
 
-    if distributed:
-        gpu = args.local_rank
-        torch.cuda.set_device(gpu)
-        torch.distributed.init_process_group(backend='nccl',init_method='env://')
-        torch.backends.cudnn.benchmark = True
-        world_size = torch.distributed.get_world_size() 
+    #if distributed:
+    #gpu = args.local_rank
+    #torch.cuda.set_device(gpu)
+    #torch.distributed.init_process_group(backend='nccl',init_method='env://')
+    #torch.backends.cudnn.benchmark = True
+    #world_size = torch.distributed.get_world_size() 
         
 
     output_dir = f'{PROJ_DIR}/output/{cfg.DATASET_NAME}_{cfg.CONFIG_NAME}_{args.seed}'
@@ -392,12 +405,14 @@ if __name__ == '__main__':
     train_set = data_arch(data_dir = data_dir, mode = 'train', transform = image_transform, cfg = cfg)
     test_set = data_arch(data_dir = data_dir, mode = 'test', transform = transforms.Resize((img_size,img_size)), cfg = cfg)
 
-    train_sampler = None 
-    if distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_set)
+    train_sampler = None
+    workers = int(cfg.TRAIN.NUM_WORKERS) 
+    #if distributed:
+    #    train_sampler = torch.utils.data.distributed.DistributedSampler(train_set)
+    #    workers = 1
 
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size = batch_size, drop_last = True, shuffle = (train_sampler is None), num_workers = int(cfg.TRAIN.NUM_WORKERS), sampler = train_sampler, pin_memory = True)
-    test_loader = torch.utils.data.DataLoader(test_set, batch_size = batch_size, drop_last = True, shuffle = False, num_workers = int(cfg.TRAIN.NUM_WORKERS), pin_memory = True)
+    train_loader = torch.utils.data.DataLoader(train_set, batch_size = batch_size, drop_last = True, shuffle = (train_sampler is None), num_workers = workers, sampler = train_sampler, pin_memory = True)
+    test_loader = torch.utils.data.DataLoader(test_set, batch_size = batch_size, drop_last = True, shuffle = False, num_workers = workers, pin_memory = True)
 
     text_arch = _TEXT_ARCH[cfg.TEXT.ENCODER_NAME]
     text_encoder = text_arch(cfg = cfg)
