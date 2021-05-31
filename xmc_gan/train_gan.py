@@ -9,7 +9,9 @@ sys.path.append(PROJ_DIR)
 import argparse
 import random
 
-import wandb 
+import wandb
+from torch.utils.tensorboard import SummaryWriter
+
 import numpy as np
 from PIL import Image
 import torch
@@ -23,7 +25,9 @@ from xmc_gan.config.gan import cfg, cfg_from_file
 from xmc_gan.dataset import WordTextDataset, SentTextDataset, index_to_sent 
 from xmc_gan.model.encoder import RNN_ENCODER, SBERT_ENCODER
 from xmc_gan.model.xmc_gan import NetG as XMC_GEN, NetD as XMC_DISC
-from xmc_gan.model.df_gan import NetG as DF_GEN, NetD as DF_DISC 
+from xmc_gan.model.df_gan import NetG as DF_GEN, NetD as DF_DISC
+from xmc_gan.model.xmc_gan_proj_text import OutNetG as XMC_PROJT_OUT_GEN, InNetG as XMC_PROJT_IN_GEN
+from xmc_gan.model.concept_gan import InNetG as CONCEPT_INATTN_GEN, OutNetG as CONCEPT_OUTATTN_GEN
 from xmc_gan.utils.logger import setup_logger
 from xmc_gan.utils.miscc import count_params
 
@@ -33,16 +37,18 @@ multiprocessing.set_start_method('spawn',True)
 
 _TEXT_DATASET = {"WORD":WordTextDataset, "SENT":SentTextDataset, }
 _TEXT_ARCH = {"RNN":RNN_ENCODER, "SBERT":SBERT_ENCODER, }
-_GEN_ARCH = {"XMC_GEN":XMC_GEN, "DF_GEN":DF_GEN, }
+_GEN_ARCH = {"XMC_GEN":XMC_GEN, "DF_GEN":DF_GEN, "XMC_PROJT_OUT_GEN":XMC_PROJT_OUT_GEN, "XMC_PROJT_IN_GEN":XMC_PROJT_IN_GEN, 
+            "CONCEPT_INATTN_GEN":CONCEPT_INATTN_GEN, "CONCEPT_OUTATTN_GEN":CONCEPT_OUTATTN_GEN, }
 _DISC_ARCH = {"XMC_DISC":XMC_DISC, "DF_DISC":DF_DISC, }
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train XMC-GAN')
-    parser.add_argument('--cfg',type=str,default='xmc_gan/cfg/xmc_gan_cond_sbert_sent.yml')
-    parser.add_argument('--gpu',dest = 'gpu_id', type=int,default=1)
+    parser.add_argument('--cfg',type=str,default='xmc_gan/cfg/concept_outattn_sbert_sent_disc_global.yml')
+    parser.add_argument('--gpu',dest = 'gpu_id', type=int, default=0)
     parser.add_argument('--seed',type=int,default=100)
     parser.add_argument('--resume_epoch',type=int,default=0)
+    parser.add_argument('--log_type',type=str,default='wdb')
     args = parser.parse_args()
     return args
 
@@ -56,7 +62,7 @@ def make_labels(batch_size, sent_embs, b_global, p = 0.6):
         global_pos = (sim_mat > p) & (sim_mat < 3)
         num_pos = (global_pos > 0).sum(1).clamp_(min=1) + 1
         labels = (labels +  torch.reciprocal(num_pos.float()) * global_pos).clamp_(max = 1)
-    return labels
+    return labels.detach()
 
 def sent_scores(emb0, emb1):
     # [bs, D]
@@ -66,16 +72,28 @@ def sent_scores(emb0, emb1):
     scores = torch.mm(emb0, emb1.transpose(0,1))
     return scores
 
-def sent_loss(imgs, txts, labels):
-    labels = labels.detach()
+def sent_loss(imgs, txts, labels, b_global):
+    #labels = labels.detach()
     scores = sent_scores(imgs, txts) # [bs(imgs), bs(txts)]
 
     #num_pos = (labels > 0).sum(1)
+    num_pos = 1 if not b_global else 2
     s = F.log_softmax(scores, dim=1) # [bs, bs]
     s = s * labels # [bs, bs]
-    s = - (s.sum(1)) / 2
+    s = - (s.sum(1)) / num_pos
     loss = s.mean()
     return loss
+
+def img_loss(real_imgs, fake_imgs, labels, b_global):
+    #labels = labels.detach()
+    num_pos = 1 if not b_global else 2
+    scores = sent_scores(real_imgs, fake_imgs) # [bs(real),bs(fake)]
+    i = F.log_softmax(scores, dim=1) # [bs, bs]
+    i = i * labels #[bs,bs]
+    i = -(i.sum(1)) / num_pos
+    loss = i.mean()
+    return loss
+
 
 def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, optimizerG, optimizerD, logger, model_dir):
 
@@ -93,8 +111,8 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
 
     vutils.save_image(imgs.data, f'{img_dir}/imgs.png', normalize=True, scale_each=True)
 
-    wandb.watch(netG,log_freq=cfg.TRAIN.LOG_INTERVAL)
-    wandb.watch(netD,log_freq=cfg.TRAIN.LOG_INTERVAL)
+    #wandb.watch(netG,log_freq=cfg.TRAIN.LOG_INTERVAL)
+    #wandb.watch(netD,log_freq=cfg.TRAIN.LOG_INTERVAL)
 
     i = 0
     log_dict = {}
@@ -143,20 +161,16 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
                 errD_mismatch = torch.nn.ReLU()(1.0 + outputs_mis[0]).mean()
                 mis_loss += errD_mismatch
             
+            if cfg.TRAIN.ENCODER_LOSS.SENT or cfg.TRAIN.ENCODER_LOSS.WORD or cfg.TRAIN.ENCODER_LOSS.DISC or cfg.TRAIN.ENCODER_LOSS.VGG:
+                labels = make_labels(batch_size, b_global= cfg.TRAIN.ENCODER_LOSS.B_GLOBAL, sent_embs = sent_embs)
+            
             enc_loss = 0.
             if cfg.TRAIN.ENCODER_LOSS.SENT:
-                labels = make_labels(batch_size, b_global = cfg.TRAIN.ENCODER_LOSS.B_GLOBAL, sent_embs = sent_embs)
-                ds_loss = sent_loss(imgs = outputs_real[1], txts=dsent_embs, labels = labels)
+                ds_loss = sent_loss(imgs = outputs_real[1], txts=dsent_embs, labels = labels, b_global=cfg.TRAIN.ENCODER_LOSS.B_GLOBAL)
                 enc_loss += ds_loss  
             if cfg.TRAIN.ENCODER_LOSS.WORD:
                 raise NotImplementedError
                 enc_loss += word_loss
-            if cfg.TRAIN.ENCODER_LOSS.DISC:
-                raise NotImplementedError
-                enc_loss += disc_loss
-            if cfg.TRAIN.ENCODER_LOSS.VGG:
-                raise NotImplementedError
-                enc_loss += vgg_loss
             
             errD = errD_real + (mis_loss * cfg.TRAIN.SMOOTH.MISMATCH) + enc_loss
         
@@ -200,14 +214,16 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
                 
                 enc_loss = 0.0
                 if cfg.TRAIN.ENCODER_LOSS.SENT:
-                    labels = make_labels(batch_size, b_global = False, sent_embs = sent_embs)
-                    gs_loss = sent_loss(imgs = outputs[1], txts=dsent_embs, labels = labels)
+                    gs_loss = sent_loss(imgs = outputs[1], txts=dsent_embs, labels = labels, b_global=cfg.TRAIN.ENCODER_LOSS.B_GLOBAL)
                     enc_loss += gs_loss
                 if cfg.TRAIN.ENCODER_LOSS.WORD:
                     raise NotImplementedError
                     enc_loss += word_loss
                 if cfg.TRAIN.ENCODER_LOSS.DISC:
-                    raise NotImplementedError
+                    real_features = netD(imgs).detach()
+                    real_features = F.avg_pool2d(real_features, kernel_size = 4)
+                    real_features = real_features.view(batch_size, -1)
+                    disc_loss = img_loss(real_imgs=real_features, fake_imgs=outputs[1],labels=labels, b_global=cfg.TRAIN.ENCODER_LOSS.B_GLOBAL)
                     enc_loss += disc_loss
                 if cfg.TRAIN.ENCODER_LOSS.VGG:
                     raise NotImplementedError
@@ -228,19 +244,29 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             if (step + 1) % cfg.TRAIN.LOG_INTERVAL == 0:
                 vutils.save_image(fake.data,f'{img_dir}/fake_samples_{step:03d}.png',normalize=True,scale_each=True)
                 
+        if args.log_type == 'wdb':
+            log_dict.clear()
+            log_dict.update({'epoch':epoch})
+            log_dict.update({'Loss_D':errD.item()})
+            log_dict.update({'Loss_G':errG.item()})
+            log_dict.update({'errD_real':errD_real.item()})
+            log_dict.update({'errD_fake':errD_fake.item()})
+            log_dict.update({'errD_mismatch':errD_mismatch.item()}) if cfg.TRAIN.RMIS_LOSS else None
+            log_dict.update({'ds_loss':ds_loss.item()}) if cfg.TRAIN.ENCODER_LOSS.SENT else None
+            log_dict.update({'gs_loss':gs_loss.item()}) if cfg.TRAIN.ENCODER_LOSS.SENT else None
+            log_dict.update({'disc_loss':disc_loss.item()}) if cfg.TRAIN.ENCODER_LOSS.DISC else None 
+            wandb.log(log_dict)
+        else:
+            writer.add_scalar('epoch', epoch, epoch)
+            writer.add_scalar('Loss_D',errD.item(), epoch)
+            writer.add_scalar('Loss_G',errG.item(), epoch)
+            writer.add_scalar('errD_real',errD_real.item(), epoch)
+            writer.add_scalar('errD_fake',errD_fake.item(), epoch)
+            writer.add_scalar('errD_mismatch',errD_mismatch.item(), epoch) if cfg.TRAIN.RMIS_LOSS else None
+            writer.add_scalar('ds_loss',ds_loss.item(), epoch) if cfg.TRAIN.ENCODER_LOSS.SENT else None
+            writer.add_scalar('gs_loss',gs_loss.item(), epoch) if cfg.TRAIN.ENCODER_LOSS.SENT else None
+            writer.add_scalar('disc_loss',disc_loss.item(), epoch) if cfg.TRAIN.ENCODER_LOSS.DISC else None
             
-        
-        log_dict.clear()
-        log_dict.update({'epoch':epoch})
-        log_dict.update({'Loss_D':errD.item()})
-        log_dict.update({'Loss_G':errG.item()})
-        log_dict.update({'errD_real':errD_real.item()})
-        log_dict.update({'errD_fake':errD_fake.item()})
-        log_dict.update({'errD_mismatch':errD_mismatch.item()}) if cfg.TRAIN.RMIS_LOSS else None
-        log_dict.update({'ds_loss':ds_loss.item()}) if cfg.TRAIN.ENCODER_LOSS.SENT else None
-        log_dict.update({'gs_loss':gs_loss.item()}) if cfg.TRAIN.ENCODER_LOSS.SENT else None
-        
-        wandb.log(log_dict)
         
         torch.save(netG.state_dict(),f'{model_dir}/netG_{epoch:03d}.pth')
         torch.save(netD.state_dict(),f'{model_dir}/netD_{epoch:03d}.pth')
@@ -253,7 +279,7 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             fake = netG(fixed_noise, fixed_sents, words_embs = fixed_words, mask = fixed_masks)
             vutils.save_image(fake.data,f'{img_dir}/fake_samples_epoch_{epoch:03d}.png',normalize=True,scale_each=True)
 
-        eval(loader = test_loader, state_epoch = state_epoch, text_encoder = text_encoder, netG = netG, logger = logger, num_samples=6000)
+        eval(loader = test_loader, state_epoch = epoch, text_encoder = text_encoder, netG = netG, logger = logger, num_samples=6000)
 
 
 
@@ -310,8 +336,12 @@ def eval(loader, state_epoch, text_encoder, netG, logger, num_samples = 6000):
     
     fid_score = calculate_fid_given_paths([org_dir,save_dir], batch_size = 100, device = torch.device('cuda'), dims = 2048)
     logger.info(f' epoch {state_epoch}, FID : {fid_score}')
-    wandb.log({"FID":fid_score})
 
+    if args.log_type =='wdb':
+        wandb.log({"FID":fid_score})
+    else:
+        writer.add_scalar('FID', fid_score, state_epoch)
+    
 
 
 
@@ -325,9 +355,8 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
-    output_dir = f'{PROJ_DIR}/output/{cfg.DATASET_NAME}_{cfg.CONFIG_NAME}_{args.seed}'
-    wandb.init(project = f'{cfg.DATASET_NAME}_XMC_GAN_bs{cfg.TRAIN.BATCH_SIZE}', config = cfg)
-
+    output_dir = f'{PROJ_DIR}/output/{cfg.DATASET_NAME}{cfg.IMG.SIZE}_{cfg.CONFIG_NAME}_{args.seed}'
+    
     img_dir = output_dir + '/img'
     log_dir = output_dir + '/log'
     model_dir = output_dir + '/model'
@@ -340,6 +369,11 @@ if __name__ == '__main__':
     torch.cuda.set_device(args.gpu_id)
     torch.backends.cudnn.benchmark = True
 
+    if args.log_type == 'wdb':
+        wandb.init(project = f'{cfg.DATASET_NAME}{cfg.IMG.SIZE}_XMC_GAN_bs{cfg.TRAIN.BATCH_SIZE}', config = cfg)
+    else:
+        writer = SummaryWriter(log_dir = log_dir)
+    
     logger = setup_logger(name = cfg.CONFIG_NAME, save_dir = log_dir, distributed_rank = 0)
     logger.info('Using config:')
     logger.info(cfg)

@@ -1,4 +1,4 @@
-CONFIG_NAME: 'XMC_GAN_PROJT_OUT_COND_SBERT'
+CONFIG_NAME: 'XMC_GAN_PROJT_OUT_COND_SBERT_SENT'
 DATASET_NAME: 'coco'
 
 TRAIN:
@@ -17,7 +17,7 @@ TRAIN:
 
   ENCODER_LOSS:
     B_GLOBAL: False
-    SENT: False
+    SENT: True
     WORD: False
     DISC: False
     VGG: False
