@@ -49,12 +49,14 @@ __C.TRAIN.OPT.D_BETA2 = 0.999
 
 __C.GEN = edict()
 __C.GEN.ENCODER_NAME = 'XMC_GEN'
+__C.GEN.NORMALIZE = True
 
 __C.DISC = edict()
 __C.DISC.ENCODER_NAME = 'XMC_DISC'
 __C.DISC.ENCODER_DIR = ''
 __C.DISC.SPEC_NORM = True
 __C.DISC.UNCOND = True
+__C.DISC.COND = True
 __C.DISC.SENT_MATCH = False
 
 __C.IMG = edict()

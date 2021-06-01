@@ -82,14 +82,16 @@ class InNetG(nn.Module):
             [ResBlockUp(in_dim = arch['in_channels'][i],
                         out_dim = arch['out_channels'][i],
                         cond_dim = noise_dim + nef, 
-                        upsample = arch['upsample']) for i in range(2)] + \
+                        upsample = arch['upsample'],
+                        normalize = cfg.GEN.NORMALIZE) for i in range(2)] + \
             [ConceptAttnResBlockUp(in_dim= arch['in_channels'][i],
                             out_dim = arch['out_channels'][i],
                             gc_dim = noise_dim + nef,
                             text_dim = nef,
                             upsample = arch['upsample'][i],
                             cardinality = 16,
-                            bottleneck_width = 8) for i in range(2,arch['depth'])]
+                            bottleneck_width = 8,
+                            normalize = cfg.GEN.NORMALIZE) for i in range(2,arch['depth'])]
         )
 
         self.conv_out = nn.Sequential(
@@ -119,12 +121,13 @@ class InNetG(nn.Module):
 
 class ConceptAttnResBlockUp(nn.Module):
 
-    def __init__(self, in_dim, out_dim, gc_dim, text_dim, upsample, cardinality, bottleneck_width):
+    def __init__(self, in_dim, out_dim, gc_dim, text_dim, upsample, cardinality, bottleneck_width, normalize=True):
         super(ConceptAttnResBlockUp, self).__init__()
 
         self.learnable_sc = (in_dim != out_dim)
         self.upsample = upsample
         self.cardinality = cardinality
+        self.normalize = normalize
         state_dim = 4
 
         group_width = cardinality * bottleneck_width
@@ -132,12 +135,13 @@ class ConceptAttnResBlockUp(nn.Module):
 
         self.split_conv = nn.Conv2d(in_dim, group_width, 1, 1, 0, bias=False)
         self.trans_gconv = nn.Conv2d(group_width, group_width, 3, 1, 1, groups=cardinality, bias=False)
-        self.gn = nn.GroupNorm(cardinality, group_width)
+        if normalize:
+            self.gn = nn.GroupNorm(cardinality, group_width)
 
-        self.concept_sampler1 = CondConceptSampler(cardinality=cardinality, bottleneck_width=bottleneck_width, state_dim=state_dim, cond_dim=text_dim)
-        self.concept_reasoner1 = ConceptReasoner(cardinality=cardinality, state_dim=state_dim)
-        self.concept_sampler2 = CondConceptSampler(cardinality=cardinality, bottleneck_width=bottleneck_width, state_dim=state_dim, cond_dim=text_dim)
-        self.concept_reasoner2 = ConceptReasoner(cardinality=cardinality, state_dim=state_dim)
+        self.concept_sampler1 = CondConceptSampler(cardinality=cardinality, bottleneck_width=bottleneck_width, state_dim=state_dim, cond_dim=text_dim, normalize=normalize)
+        self.concept_reasoner1 = ConceptReasoner(cardinality=cardinality, state_dim=state_dim, normalize=normalize)
+        self.concept_sampler2 = CondConceptSampler(cardinality=cardinality, bottleneck_width=bottleneck_width, state_dim=state_dim, cond_dim=text_dim, normalize=normalize)
+        self.concept_reasoner2 = ConceptReasoner(cardinality=cardinality, state_dim=state_dim, normalize=normalize)
 
         self.gamma1_gconv = nn.Conv2d(cond_group_width, group_width, 1, 1, 0, groups=cardinality)
         self.beta1_gconv = nn.Conv2d(cond_group_width, group_width, 1, 1, 0, groups=cardinality)
@@ -171,7 +175,10 @@ class ConceptAttnResBlockUp(nn.Module):
         H = W = x.size(2)
 
         img_embs = F.relu(self.split_conv(x), inplace=True) # [bs, C*p, h, w]
-        img_embs = F.relu(self.gn(self.trans_gconv(img_embs)), inplace=True) # [bs, C*p, h, w] 
+        img_embs = self.trans_gconv(img_embs)
+        if self.normalize:
+            img_embs = self.gn(img_embs)
+        img_embs = F.relu(img_embs, inplace=True) # [bs, C*p, h, w] 
 
         context_embs = self.concept_sampler1(img_embs, words_embs, mask) # [bs, C*p', 1, 1]
         context_embs = self.concept_reasoner1(context_embs) # [bs, C*p', 1, 1]
@@ -211,17 +218,19 @@ class ConceptAttnResBlockUp(nn.Module):
 
 class CondConceptSampler(nn.Module):
 
-    def __init__(self, cardinality, bottleneck_width, state_dim, cond_dim):
+    def __init__(self, cardinality, bottleneck_width, state_dim, cond_dim ,normalize=True):
         super(CondConceptSampler, self).__init__()
         self.cardinality = cardinality
+        self.normalize = normalize
         group_width = cardinality * bottleneck_width
         cond_group_width = cardinality * cond_dim 
         group_state_width = cardinality * state_dim
 
         self.query_gconv = nn.Conv2d(group_width, group_state_width, 1, 1, 0, groups=cardinality, bias=False)
-        self.gn1 = nn.GroupNorm(cardinality, group_state_width)
         self.key_gconv = nn.Conv1d(cond_group_width, group_state_width, 1, 1, 0, groups=cardinality, bias=False)
-        self.gn2 = nn.GroupNorm(cardinality, group_state_width)
+        if normalize:
+            self.gn1 = nn.GroupNorm(cardinality, group_state_width)
+            self.gn2 = nn.GroupNorm(cardinality, group_state_width)
 
     def get_context_embs(self, img_gembs, words_gembs, mask):
         # img_gembs [bs, C, p', h*w]
@@ -257,14 +266,16 @@ class CondConceptSampler(nn.Module):
         T = words_embs.size(-1)
 
         query = self.query_gconv(x) # [bs, C*p', h, w]
-        query = self.gn1(query)
+        if self.normalize:
+            query = self.gn1(query)
         query = query.view(BS, self.cardinality, -1, H*W ) # [bs, C, p', h*w]
 
         words_embs = words_embs.view(BS,1,-1,T) # [bs, 1, nef, T]
         words_embs = words_embs.repeat(1,self.cardinality, 1, 1) # [bs, C, nef, T]
         words_embs = words_embs.view(BS,-1,T) # [bs, C*nef, T]
         key = self.key_gconv(words_embs) # [bs, C*p', T]
-        key = self.gn2(key)
+        if self.normalize:
+            key = self.gn2(key)
         key = key.view(BS, self.cardinality, -1, T) # [bs, C, p', T]
 
         word_context = self.get_context_embs(query, key, mask) # [bs, C*p', 1, 1]
@@ -272,11 +283,13 @@ class CondConceptSampler(nn.Module):
         return word_context
 
 class ConceptReasoner(nn.Module):
-    def __init__(self, cardinality, state_dim):
+    def __init__(self, cardinality, state_dim ,normalize=True):
         super(ConceptReasoner,self).__init__()
         self.cardinality = cardinality
+        self.normalize = normalize
         self.proj_edge = nn.Linear(state_dim, cardinality, bias=False)
-        self.bn = nn.BatchNorm1d(num_features=cardinality)
+        if self.normalize:
+            self.bn = nn.BatchNorm1d(num_features=cardinality)
 
     def forward(self, x, **kwargs):
         # x [bs, C*p', 1, 1]
@@ -287,7 +300,8 @@ class ConceptReasoner(nn.Module):
         adj_mat = torch.tanh(adj_mat) # [bs, C, C]
 
         out = x + torch.matmul(adj_mat, x) # [bs, C, p']
-        out = self.bn(out) # [bs, C, p']
+        if self.normalize:
+            out = self.bn(out) # [bs, C, p']
         out = F.relu(out, inplace=True) # [bs, C, p']
         out = out.view(BS,-1,1,1) # [bs, C*p', 1, 1]
         return out
@@ -312,14 +326,16 @@ class OutNetG(nn.Module):
             [ResBlockUp(in_dim = arch['in_channels'][i],
                         out_dim = arch['out_channels'][i],
                         cond_dim = noise_dim + nef, 
-                        upsample = arch['upsample']) for i in range(2)] + \
+                        upsample = arch['upsample'],
+                        normalize=cfg.GEN.NORMALIZE) for i in range(2)] + \
             [OutAttnResBlockUp(in_dim= arch['in_channels'][i],
                             out_dim = arch['out_channels'][i],
                             gc_dim = noise_dim + nef,
                             text_dim = nef,
                             upsample = arch['upsample'][i],
                             cardinality = 16,
-                            bottleneck_width = 8) for i in range(2,arch['depth'])]
+                            bottleneck_width = 8,
+                            normalize=cfg.GEN.NORMALIZE) for i in range(2,arch['depth'])]
         )
 
         self.conv_out = nn.Sequential(
@@ -351,10 +367,11 @@ class OutNetG(nn.Module):
 
 class OutAttnResBlockUp(nn.Module):
 
-    def __init__(self, in_dim, out_dim, gc_dim, text_dim, upsample, cardinality, bottleneck_width):
+    def __init__(self, in_dim, out_dim, gc_dim, text_dim, upsample, cardinality, bottleneck_width, normalize = True):
         super(OutAttnResBlockUp, self).__init__()
 
         self.learnable_sc = (in_dim != out_dim)
+        self.normalize = normalize
         self.upsample = upsample
         self.cardinality = cardinality
         state_dim = 4
@@ -364,14 +381,15 @@ class OutAttnResBlockUp(nn.Module):
 
         self.split_conv = nn.Conv2d(in_dim, group_width, 1, 1, 0, bias=False)
         self.trans_gconv = nn.Conv2d(group_width, group_width, 3, 1, 1, groups=cardinality, bias=False)
-        self.gn = nn.GroupNorm(cardinality, group_width)
+        if normalize:
+            self.gn = nn.GroupNorm(cardinality, group_width)
 
-        self.concept_sampler1 = ConceptSampler(cardinality=cardinality, bottleneck_width=bottleneck_width, state_dim=state_dim)
-        self.concept_reasoner1 = ConceptReasoner(cardinality=cardinality, state_dim=state_dim)
+        self.concept_sampler1 = ConceptSampler(cardinality=cardinality, bottleneck_width=bottleneck_width, state_dim=state_dim, normalize=normalize)
+        self.concept_reasoner1 = ConceptReasoner(cardinality=cardinality, state_dim=state_dim, normalize=normalize)
         self.word_conv1 = nn.Conv1d(text_dim, state_dim, 1, 1, 0, bias = False)
 
-        self.concept_sampler2 = ConceptSampler(cardinality=cardinality, bottleneck_width=bottleneck_width, state_dim=state_dim)
-        self.concept_reasoner2 = ConceptReasoner(cardinality=cardinality, state_dim=state_dim)
+        self.concept_sampler2 = ConceptSampler(cardinality=cardinality, bottleneck_width=bottleneck_width, state_dim=state_dim, normalize=normalize)
+        self.concept_reasoner2 = ConceptReasoner(cardinality=cardinality, state_dim=state_dim, normalize=normalize)
         self.word_conv2 = nn.Conv1d(text_dim, state_dim, 1, 1, 0, bias=False)
 
         self.gamma1_gconv = nn.Conv2d(cond_group_width, group_width, 1, 1, 0, groups=cardinality)
@@ -428,7 +446,10 @@ class OutAttnResBlockUp(nn.Module):
         H = W = x.size(2)
 
         img_embs = F.relu(self.split_conv(x), inplace=True) # [bs, C*p, h, w]
-        img_embs = F.relu(self.gn(self.trans_gconv(img_embs)), inplace=True) # [bs, C*p, h, w] 
+        img_embs = self.trans_gconv(img_embs)
+        if self.normalize:
+            img_embs = self.gn(img_embs)
+        img_embs = F.relu(img_embs, inplace=True) # [bs, C*p, h, w] 
 
         state_embs = self.concept_sampler1(img_embs) # [bs, C*p', 1, 1]
         state_embs = self.concept_reasoner1(state_embs) # [bs, C*p', 1, 1]
@@ -474,17 +495,21 @@ class OutAttnResBlockUp(nn.Module):
 
 class ConceptSampler(nn.Module):
 
-    def __init__(self, cardinality, bottleneck_width, state_dim):
+    def __init__(self, cardinality, bottleneck_width, state_dim, normalize=True):
         super(ConceptSampler, self).__init__()
         self.cardinality = cardinality
+        self.normalize = normalize
         group_width = cardinality * bottleneck_width
         group_state_width = cardinality * state_dim
 
         self.query_gconv = nn.Conv2d(group_width, group_state_width, 1, 1, 0, groups=cardinality, bias=False)
-        self.gn1 = nn.GroupNorm(cardinality, group_state_width)
         self.key_gconv = nn.Conv2d(group_width, group_state_width, 1, 1, 0, groups=cardinality, bias=False)
-        self.gn2 = nn.GroupNorm(cardinality, group_state_width)
         self.value_gconv = nn.Conv2d(group_width, group_state_width, 1, 1, 0, groups=cardinality, bias = False)
+        
+        if normalize:
+            self.gn1 = nn.GroupNorm(cardinality, group_state_width)
+            self.gn2 = nn.GroupNorm(cardinality, group_state_width)
+            
         self.register_buffer('norm', torch.rsqrt(torch.as_tensor(state_dim,dtype=torch.float)))
 
     def forward(self, x, **kwargs):
@@ -494,11 +519,13 @@ class ConceptSampler(nn.Module):
 
         query = F.adaptive_avg_pool2d(x, 1) # [bs, C*p, 1, 1]
         query = self.query_gconv(query) # [bs, C*p', 1, 1]
-        query = self.gn1(query)
+        if self.normalize:
+            query = self.gn1(query)
         query = query.view(BS, self.cardinality, 1, -1 ) # [bs, C, 1, p']
 
         key = self.key_gconv(x) # [bs, C*p', h, w]
-        key = self.gn2(key)
+        if self.normalize:
+            key = self.gn2(key)
         key = key.view(BS, self.cardinality, -1, H*W) # [bs, C, p', h*w]
 
         attn = torch.matmul(query, key) # [bs, C, 1, h*w]
@@ -517,17 +544,19 @@ class ConceptSampler(nn.Module):
 
 class ResBlockUp(nn.Module):
 
-    def __init__(self, in_dim, out_dim, cond_dim, upsample):
+    def __init__(self, in_dim, out_dim, cond_dim, upsample, normalize=True):
         super(ResBlockUp, self).__init__()
 
         self.learnable_sc = (in_dim != out_dim)
+        self.normalize = normalize
         self.upsample = upsample
 
         self.c1 = nn.Conv2d(in_dim, out_dim, 3, 1, 1)
         self.c2 = nn.Conv2d(out_dim, out_dim, 3, 1, 1)
 
-        self.bn1 = nn.BatchNorm2d(in_dim)
-        self.bn2 = nn.BatchNorm2d(out_dim)
+        if normalize:
+            self.bn1 = nn.BatchNorm2d(in_dim)
+            self.bn2 = nn.BatchNorm2d(out_dim)
 
         self.linear_gamma1 = nn.Linear(cond_dim, in_dim, bias=False)
         self.linear_beta1 = nn.Linear(cond_dim, in_dim, bias=False)
@@ -555,7 +584,9 @@ class ResBlockUp(nn.Module):
         # global_cond : [bs, noise_dim + nef]
         gamma = self.linear_gamma1(global_cond) # [bs, in_dim]
         beta = self.linear_beta1(global_cond) # [bs, in_dim]
-        out = gamma.view(gamma.size(0), gamma.size(1), 1, 1) * self.bn1(x) + beta.view(beta.size(0), beta.size(1), 1, 1) # [bs, in_dim, h, w]
+        if self.normalize:
+            x = self.bn1(x)
+        out = gamma.view(gamma.size(0), gamma.size(1), 1, 1) * x + beta.view(beta.size(0), beta.size(1), 1, 1) # [bs, in_dim, h, w]
         out = F.relu(out, inplace=True) # [bs, in_dim, h, w]
         if self.upsample:
             out = F.interpolate(out, scale_factor=2) 
@@ -563,7 +594,9 @@ class ResBlockUp(nn.Module):
         out = self.c1(out) # [bs, out_dim, h', w']
         gamma = self.linear_gamma2(global_cond) # [bs, out_dim]
         beta = self.linaer_beta2(global_cond) # [bs, out_dim]
-        out = gamma.view(gamma.size(0), gamma.size(1), 1, 1) * self.bn2(out) + beta.view(beta.size(0), beta.size(1), 1, 1) # [bs, out_dim, h', w']
+        if self.normalize:
+            out = self.bn2(out)
+        out = gamma.view(gamma.size(0), gamma.size(1), 1, 1) * out + beta.view(beta.size(0), beta.size(1), 1, 1) # [bs, out_dim, h', w']
         out = F.relu(out, inplace=True) # [bs, out_dim, h', w']
         out = self.c2(out) # [bs, out_dim, h', w']
 

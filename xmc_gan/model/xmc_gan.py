@@ -287,7 +287,7 @@ class NetD(nn.Module):
                   spec_norm = spec_norm) for i in range(1,arch['depth'])]
         )
         
-        self.COND_DNET = PROJD_GET_LOGITS(in_dim = arch['out_channels'][-1], text_dim = cfg.TEXT.EMBEDDING_DIM, uncond=cfg.DISC.UNCOND, spec_norm = spec_norm)
+        self.COND_DNET = PROJD_GET_LOGITS(in_dim = arch['out_channels'][-1], text_dim = cfg.TEXT.EMBEDDING_DIM, uncond=cfg.DISC.UNCOND, cond=cfg.DISC.COND, spec_norm = spec_norm)
 
     def forward(self, x, **kwargs):
 
@@ -299,10 +299,11 @@ class NetD(nn.Module):
         return out
 
 class PROJD_GET_LOGITS(nn.Module):
-    def __init__(self, in_dim, text_dim, uncond, spec_norm = True):
+    def __init__(self, in_dim, text_dim, uncond, cond=True, spec_norm = True):
         super(PROJD_GET_LOGITS, self).__init__()
         
         self.uncond = uncond
+        self.cond = cond
         # GSP
         #self.pool = nn.AvgPool2d(kernel_size=4, divisor_override=1)
         self.pool = nn.AvgPool2d(kernel_size=4)
@@ -327,17 +328,16 @@ class PROJD_GET_LOGITS(nn.Module):
         #else:
         #    out_norm = out
         #    sent_embs_norm = sent_embs
-        
-        match = torch.einsum('be,be->b', out, sent_embs)
 
+        match = 0.
+        if self.cond:
+            match += torch.einsum('be,be->b', out, sent_embs)
         if self.uncond:
             logit = self.proj_logit(out)
             logit = logit.view(-1)
             match += logit
 
         return [match, out]
-
-
 
 class ResBlockDown(nn.Module):
 

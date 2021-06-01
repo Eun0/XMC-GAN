@@ -44,11 +44,13 @@ _DISC_ARCH = {"XMC_DISC":XMC_DISC, "DF_DISC":DF_DISC, }
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train XMC-GAN')
-    parser.add_argument('--cfg',type=str,default='xmc_gan/cfg/concept_outattn_sbert_sent_disc_global.yml')
+    parser.add_argument('--cfg',type=str,default='xmc_gan/cfg/concept_outattn_cond_sbert_sent_disc.yml')
     parser.add_argument('--gpu',dest = 'gpu_id', type=int, default=0)
     parser.add_argument('--seed',type=int,default=100)
     parser.add_argument('--resume_epoch',type=int,default=0)
     parser.add_argument('--log_type',type=str,default='wdb')
+    parser.add_argument('--bs',type=int,default=-1)
+    parser.add_argument('--imsize',type=int,default=-1)
     args = parser.parse_args()
     return args
 
@@ -143,22 +145,21 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
 
             real_features = netD(imgs)
             outputs_real = netD.COND_DNET(real_features, sent_embs = dsent_embs)
-            errD_real = torch.nn.ReLU()(1.0 - outputs_real[0]).mean()
+            errD_real = F.relu(1.0 - outputs_real[0], inplace=True).mean()
             
-        
             noise = torch.randn(batch_size, cfg.TRAIN.NOISE_DIM)
             noise = noise.cuda()
             fake = netG(noise=noise, sent_embs=sent_embs, words_embs=words_embs, mask = mask)
 
             fake_features = netD(fake.detach())
 
-            outputs_fake = netD.COND_DNET(fake_features,sent_embs = dsent_embs)
-            errD_fake = torch.nn.ReLU()(1.0 + outputs_fake[0]).mean()
+            outputs_fake = netD.COND_DNET(fake_features, sent_embs = dsent_embs)
+            errD_fake = F.relu(1.0 + outputs_fake[0],inplace=True).mean()
             mis_loss = errD_fake
             
             if cfg.TRAIN.RMIS_LOSS:
                 outputs_mis = netD.COND_DNET(real_features[:(batch_size-1)], sent_embs = dsent_embs[1:batch_size])
-                errD_mismatch = torch.nn.ReLU()(1.0 + outputs_mis[0]).mean()
+                errD_mismatch = F.relu(1.0 + outputs_mis[0],inplace=True).mean()
                 mis_loss += errD_mismatch
             
             if cfg.TRAIN.ENCODER_LOSS.SENT or cfg.TRAIN.ENCODER_LOSS.WORD or cfg.TRAIN.ENCODER_LOSS.DISC or cfg.TRAIN.ENCODER_LOSS.VGG:
@@ -204,6 +205,7 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             i+= 1
             ###### Train Generator            
             if i%2 == 0:
+                #del fake_features
                 if cfg.DISC.SENT_MATCH:
                     dsent_embs = netD.COND_DNET.get_dsent_embs(sent_embs)
                 else:
@@ -240,6 +242,8 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
                 i = 0
                 log = f'[{epoch}/{cfg.TRAIN.MAX_EPOCH}][{step}/{len(train_loader)}] Loss_D: {errD.item():.3f} Loss_G: {errG.item():.3f} errD_real: {errD_real.item():.3f} errD_fake: {errD_fake.item():.3f} '
                 logger.info(log)
+
+            #torch.cuda.empty_cache()
 
             if (step + 1) % cfg.TRAIN.LOG_INTERVAL == 0:
                 vutils.save_image(fake.data,f'{img_dir}/fake_samples_{step:03d}.png',normalize=True,scale_each=True)
@@ -349,10 +353,16 @@ if __name__ == '__main__':
 
     args = parse_args()
     cfg_from_file(args.cfg)
-    
+
+    if args.imsize != -1:
+        cfg.IMG.SIZE = args.imsize
+    if args.bs != -1:
+        cfg.TRAIN.BATCH_SIZE = args.bs
+
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
     output_dir = f'{PROJ_DIR}/output/{cfg.DATASET_NAME}{cfg.IMG.SIZE}_{cfg.CONFIG_NAME}_{args.seed}'
