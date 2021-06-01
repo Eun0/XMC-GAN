@@ -28,6 +28,7 @@ from xmc_gan.model.xmc_gan import NetG as XMC_GEN, NetD as XMC_DISC
 from xmc_gan.model.df_gan import NetG as DF_GEN, NetD as DF_DISC
 from xmc_gan.model.xmc_gan_proj_text import OutNetG as XMC_PROJT_OUT_GEN, InNetG as XMC_PROJT_IN_GEN
 from xmc_gan.model.concept_gan import InNetG as CONCEPT_INATTN_GEN, OutNetG as CONCEPT_OUTATTN_GEN
+from xmc_gan.model.concept_deep_gan import InNetG as DEEP_CONCEPT_INATTN_GEN, OutNetG as DEEP_CONCEPT_OUTATTN_GEN
 from xmc_gan.utils.logger import setup_logger
 from xmc_gan.utils.miscc import count_params
 
@@ -38,7 +39,8 @@ multiprocessing.set_start_method('spawn',True)
 _TEXT_DATASET = {"WORD":WordTextDataset, "SENT":SentTextDataset, }
 _TEXT_ARCH = {"RNN":RNN_ENCODER, "SBERT":SBERT_ENCODER, }
 _GEN_ARCH = {"XMC_GEN":XMC_GEN, "DF_GEN":DF_GEN, "XMC_PROJT_OUT_GEN":XMC_PROJT_OUT_GEN, "XMC_PROJT_IN_GEN":XMC_PROJT_IN_GEN, 
-            "CONCEPT_INATTN_GEN":CONCEPT_INATTN_GEN, "CONCEPT_OUTATTN_GEN":CONCEPT_OUTATTN_GEN, }
+            "CONCEPT_INATTN_GEN":CONCEPT_INATTN_GEN, "CONCEPT_OUTATTN_GEN":CONCEPT_OUTATTN_GEN,
+            "DEEP_CONCEPT_INATTN_GEN":DEEP_CONCEPT_INATTN_GEN, "DEEP_CONCEPT_OUTATTN_GEN":DEEP_CONCEPT_OUTATTN_GEN, }
 _DISC_ARCH = {"XMC_DISC":XMC_DISC, "DF_DISC":DF_DISC, }
 
 
