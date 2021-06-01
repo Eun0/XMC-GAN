@@ -320,7 +320,7 @@ class PROJD_GET_LOGITS(nn.Module):
         out = self.pool(out) # [bs, in_dim, 1, 1]
         out = out.view(out.size(0),-1) # [bs, in_dim]
 
-        #sent_embs = self.proj_match(sent_embs) # [bs, in_dim]
+        sent_embs = self.proj_match(sent_embs) # [bs, in_dim]
 
         #if self.uncond:
         #    out_norm = F.normalize(out, p=2, dim=1) # [bs, in_dim]
@@ -337,7 +337,7 @@ class PROJD_GET_LOGITS(nn.Module):
             logit = logit.view(-1)
             match += logit
 
-        return [match, out]
+        return [match, out, sent_embs]
 
 class ResBlockDown(nn.Module):
 

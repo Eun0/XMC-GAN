@@ -4,7 +4,7 @@ import numpy as np
 import torch.nn.functional as F
 from collections import OrderedDict
 
-from .modules import conv2d_nxn
+from .modules import conv2d_nxn,linear
 
 def gen_arch(img_size, nch):
     assert img_size in [64,128,256]
@@ -67,10 +67,14 @@ class NetG(nn.Module):
         self.ngf = cfg.TRAIN.NCH
         noise_dim = cfg.TRAIN.NOISE_DIM
 
+        
         arch = gen_arch(img_size = cfg.IMG.SIZE, nch = self.ngf)
 
         init_size = (8 * self.ngf) * 4 * 4
         self.proj_noise = nn.Linear(noise_dim, init_size)
+        self.proj_sent = nn.Linear(cfg.TEXT.EMBEDDING_DIM, cfg.TRAIN.NEF) if (cfg.TEXT.EMBEDDING_DIM != cfg.TRAIN.NEF) \
+                    else nn.Identity()
+        
         self.upblocks = nn.ModuleList(
             [G_Block(in_dim = arch['in_channels'][i],
                     out_dim = arch['out_channels'][i],
@@ -84,10 +88,13 @@ class NetG(nn.Module):
             nn.Tanh(),
         )
 
+
     def forward(self, noise, sent_embs, **kwargs):
 
         out = self.proj_noise(noise)
         out = out.view(out.size(0), 8 * self.ngf, 4, 4) # [bs,8*ngf,4,4]
+
+        sent_embs = self.proj_sent(sent_embs)
 
         for gblock in self.upblocks:
             out = gblock(out, sent_embs)
@@ -106,7 +113,7 @@ class NetD(nn.Module):
         arch = disc_arch(img_size = cfg.IMG.SIZE, nch = ndf)
 
         self.conv_img = conv2d_nxn(in_dim = arch['in_channels'][0], out_dim = arch['out_channels'][0], kernel_size = 3, stride = 1, padding = 1, spec_norm= spec_norm)
-
+        
         self.downblocks = nn.ModuleList(
             [resD(in_dim = arch['in_channels'][i],
                   out_dim = arch['out_channels'][i],
@@ -114,7 +121,7 @@ class NetD(nn.Module):
                   spec_norm = spec_norm) for i in range(1,arch['depth'])]
         )
         
-        self.COND_DNET = D_GET_LOGITS(ndf, cond_dim = cfg.TRAIN.NEF, spec_norm = spec_norm)
+        self.COND_DNET = D_GET_LOGITS(cfg, ndf=ndf, spec_norm = spec_norm)
 
     def forward(self, x, **kwargs):
 
@@ -126,9 +133,21 @@ class NetD(nn.Module):
         return out
 
 class D_GET_LOGITS(nn.Module):
-    def __init__(self, ndf, cond_dim, spec_norm = False):
+    def __init__(self, cfg, ndf, spec_norm = False):
         super(D_GET_LOGITS, self).__init__()
-        
+
+        text_dim = cfg.TEXT.EMBEDDING_DIM
+        nef = cfg.TRAIN.NEF
+
+        if cfg.DISC.SENT_MATCH:
+            self.proj_match = linear(text_dim, ndf * 16, spec_norm=spec_norm)
+            cond_dim = ndf * 16
+        elif text_dim != nef:
+            self.proj_match = linear(text_dim, nef, spec_norm=spec_norm)
+            cond_dim = nef 
+        else:
+            self.proj_match = nn.Identity()
+            cond_dim = nef
 
         self.joint_conv = nn.Sequential(
             conv2d_nxn(in_dim = ndf * 16 + cond_dim, out_dim = ndf * 2, kernel_size = 3, stride = 1, padding = 1, bias = False, spec_norm = spec_norm),
@@ -137,12 +156,14 @@ class D_GET_LOGITS(nn.Module):
         )
 
     def forward(self, x, sent_embs, **kwargs):
+        out = F.adaptive_avg_pool2d(x, 1).view(x.size(0),x.size(1))
+        sent_embs = self.proj_match(sent_embs)
         
         c = sent_embs.view(sent_embs.size(0), -1, 1, 1)
         c = c.repeat(1, 1, 4, 4)
         h_c_code = torch.cat((x, c), 1)
         match = self.joint_conv(h_c_code)
-        return [match]
+        return [match, out, sent_embs]
 
 
 class G_Block(nn.Module):
@@ -191,7 +212,6 @@ class G_Block(nn.Module):
         h = nn.LeakyReLU(0.2,inplace=True)(h)
 
         return self.c2(h)
-
 
 
 class affine(nn.Module):

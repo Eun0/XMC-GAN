@@ -26,6 +26,7 @@ from xmc_gan.dataset import WordTextDataset, SentTextDataset, index_to_sent
 from xmc_gan.model.encoder import RNN_ENCODER, SBERT_ENCODER
 from xmc_gan.model.xmc_gan import NetG as XMC_GEN, NetD as XMC_DISC
 from xmc_gan.model.df_gan import NetG as DF_GEN, NetD as DF_DISC
+from xmc_gan.model.df_concept_gan import InNetG as CONCEPT_IN_DF_GEN, OutNetG as CONCEPT_OUT_DF_GEN, NetD as CONCEPT_NETD
 from xmc_gan.model.xmc_gan_proj_text import OutNetG as XMC_PROJT_OUT_GEN, InNetG as XMC_PROJT_IN_GEN
 from xmc_gan.model.concept_gan import InNetG as CONCEPT_INATTN_GEN, OutNetG as CONCEPT_OUTATTN_GEN
 from xmc_gan.model.concept_deep_gan import InNetG as DEEP_CONCEPT_INATTN_GEN, OutNetG as DEEP_CONCEPT_OUTATTN_GEN
@@ -40,17 +41,18 @@ _TEXT_DATASET = {"WORD":WordTextDataset, "SENT":SentTextDataset, }
 _TEXT_ARCH = {"RNN":RNN_ENCODER, "SBERT":SBERT_ENCODER, }
 _GEN_ARCH = {"XMC_GEN":XMC_GEN, "DF_GEN":DF_GEN, "XMC_PROJT_OUT_GEN":XMC_PROJT_OUT_GEN, "XMC_PROJT_IN_GEN":XMC_PROJT_IN_GEN, 
             "CONCEPT_INATTN_GEN":CONCEPT_INATTN_GEN, "CONCEPT_OUTATTN_GEN":CONCEPT_OUTATTN_GEN,
-            "DEEP_CONCEPT_INATTN_GEN":DEEP_CONCEPT_INATTN_GEN, "DEEP_CONCEPT_OUTATTN_GEN":DEEP_CONCEPT_OUTATTN_GEN, }
-_DISC_ARCH = {"XMC_DISC":XMC_DISC, "DF_DISC":DF_DISC, }
+            "DEEP_CONCEPT_INATTN_GEN":DEEP_CONCEPT_INATTN_GEN, "DEEP_CONCEPT_OUTATTN_GEN":DEEP_CONCEPT_OUTATTN_GEN,
+            "CONCEPT_IN_DF_GEN":CONCEPT_IN_DF_GEN, "CONCEPT_OUT_DF_GEN":CONCEPT_OUT_DF_GEN, }
+_DISC_ARCH = {"XMC_DISC":XMC_DISC, "DF_DISC":DF_DISC, "CONCEPT_NETD":CONCEPT_NETD, }
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train XMC-GAN')
-    parser.add_argument('--cfg',type=str,default='xmc_gan/cfg/concept_outattn_cond_sbert_sent_disc.yml')
+    parser.add_argument('--cfg',type=str,default='xmc_gan/cfg/concept_outattn_gan.yml')
     parser.add_argument('--gpu',dest = 'gpu_id', type=int, default=0)
     parser.add_argument('--seed',type=int,default=100)
     parser.add_argument('--resume_epoch',type=int,default=0)
-    parser.add_argument('--log_type',type=str,default='wdb')
+    parser.add_argument('--log_type',type=str,default='tb')
     parser.add_argument('--bs',type=int,default=-1)
     parser.add_argument('--imsize',type=int,default=-1)
     args = parser.parse_args()
@@ -140,13 +142,9 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             batch_size = mask.size(0)
 
             #### Train Discriminator
-            if cfg.DISC.SENT_MATCH:
-                dsent_embs = netD.COND_DNET.get_dsent_embs(sent_embs)
-            else:
-                dsent_embs = sent_embs
 
             real_features = netD(imgs)
-            outputs_real = netD.COND_DNET(real_features, sent_embs = dsent_embs)
+            outputs_real = netD.COND_DNET(real_features, sent_embs = sent_embs)
             errD_real = F.relu(1.0 - outputs_real[0], inplace=True).mean()
             
             noise = torch.randn(batch_size, cfg.TRAIN.NOISE_DIM)
@@ -155,12 +153,12 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
 
             fake_features = netD(fake.detach())
 
-            outputs_fake = netD.COND_DNET(fake_features, sent_embs = dsent_embs)
-            errD_fake = F.relu(1.0 + outputs_fake[0],inplace=True).mean()
+            outputs_fake = netD.COND_DNET(fake_features, sent_embs = sent_embs)
+            errD_fake = F.relu(1.0 + outputs_fake[0], inplace=True).mean()
             mis_loss = errD_fake
             
             if cfg.TRAIN.RMIS_LOSS:
-                outputs_mis = netD.COND_DNET(real_features[:(batch_size-1)], sent_embs = dsent_embs[1:batch_size])
+                outputs_mis = netD.COND_DNET(real_features[:(batch_size-1)], sent_embs = sent_embs[1:batch_size])
                 errD_mismatch = F.relu(1.0 + outputs_mis[0],inplace=True).mean()
                 mis_loss += errD_mismatch
             
@@ -169,7 +167,7 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             
             enc_loss = 0.
             if cfg.TRAIN.ENCODER_LOSS.SENT:
-                ds_loss = sent_loss(imgs = outputs_real[1], txts=dsent_embs, labels = labels, b_global=cfg.TRAIN.ENCODER_LOSS.B_GLOBAL)
+                ds_loss = sent_loss(imgs = outputs_real[1], txts=outputs_real[2], labels = labels, b_global=cfg.TRAIN.ENCODER_LOSS.B_GLOBAL)
                 enc_loss += ds_loss  
             if cfg.TRAIN.ENCODER_LOSS.WORD:
                 raise NotImplementedError
@@ -183,6 +181,7 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             optimizerD.step()
 
             if cfg.TRAIN.MAGP:
+               
                 interpolated = (imgs.data).requires_grad_()
                 sent_inter = (sent_embs.data).requires_grad_()
                 features = netD(interpolated)
@@ -206,19 +205,16 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
 
             i+= 1
             ###### Train Generator            
-            if i%2 == 0:
+            if i % cfg.TRAIN.N_CRITIC == 0:
                 #del fake_features
-                if cfg.DISC.SENT_MATCH:
-                    dsent_embs = netD.COND_DNET.get_dsent_embs(sent_embs)
-                else:
-                    dsent_embs = sent_embs
+        
                 features = netD(fake)
-                outputs = netD.COND_DNET(features, sent_embs = dsent_embs)
+                outputs = netD.COND_DNET(features, sent_embs = sent_embs)
                 errG_fake = - outputs[0].mean()
                 
                 enc_loss = 0.0
                 if cfg.TRAIN.ENCODER_LOSS.SENT:
-                    gs_loss = sent_loss(imgs = outputs[1], txts=dsent_embs, labels = labels, b_global=cfg.TRAIN.ENCODER_LOSS.B_GLOBAL)
+                    gs_loss = sent_loss(imgs = outputs[1], txts=outputs[2], labels = labels, b_global=cfg.TRAIN.ENCODER_LOSS.B_GLOBAL)
                     enc_loss += gs_loss
                 if cfg.TRAIN.ENCODER_LOSS.WORD:
                     raise NotImplementedError
@@ -234,7 +230,6 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
                     enc_loss += vgg_loss
 
                 errG = errG_fake + enc_loss
-                
                 
                 netG.zero_grad()
                 netD.zero_grad()
