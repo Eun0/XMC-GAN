@@ -1,0 +1,70 @@
+CONFIG_NAME: 'CONCEPT_IN_DF_GEN'
+DATASET_NAME: 'coco'
+
+TRAIN:
+  FLAG: True
+  MAX_EPOCH: 121
+  BATCH_SIZE: 88
+  NUM_WORKERS: 8
+  LOG_INTERVAL: 200
+  SAVE_INTERVAL: 1
+  N_CRITIC: 1
+  
+  HE_INIT: True
+  
+  NEF: 256
+  NCH: 32
+  NOISE_DIM: 100
+
+  RMIS_LOSS: True
+  MAGP: True
+
+  ENCODER_LOSS:
+    B_GLOBAL: False
+    SENT: False
+    WORD: False
+    DISC: False
+    VGG: False
+
+  OPT:
+    G_LR: 0.0001
+    G_BETA1: 0.0
+    G_BETA2: 0.9
+    D_LR: 0.0004
+    D_BETA1: 0.0
+    D_BETA2: 0.9
+
+GEN:
+  ENCODER_NAME: 'CONCEPT_IN_DF_GEN'
+  NORMALIZE: True
+
+DISC:
+  ENCODER_NAME: 'DF_DISC'
+  ENCODER_DIR: ''
+  SPEC_NORM: False 
+  UNCOND: False
+  SENT_MATCH: False
+  IMG_MATCH: False
+
+IMG:
+  SIZE: 64
+
+TEXT:
+  TYPE: 'WORD' #'WORD' # 'SENT'
+  CAPTIONS_PER_IMAGE: 5
+  MAX_LENGTH: 15
+  VOCA_SIZE: 27297
+
+  ENCODER_NAME: 'RNN' #'RNN' # 'SBERT'
+  ENCODER_DIR: 'data/DAMSMencoders/coco/text_encoder100.pth'       #'data/DAMSMencoders/coco/text_encoder100.pth'
+  EMBEDDING_DIM: 256  #768
+  NUM_LAYERS: 1
+  RNN_TYPE: 'LSTM'
+
+  # if use bert text encoder
+  #FIX_BERT: True
+  #BERT_NORM: False
+  #POOLING_MODE: 'MEAN'
+  #SENT_FT: False
+  #WORD_FT: False
+  #JOINT_FT: False
