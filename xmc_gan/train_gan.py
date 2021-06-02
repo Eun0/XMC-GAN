@@ -51,7 +51,7 @@ _DISC_ARCH = {#"XMC_DISC":XMC_DISC,
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train XMC-GAN')
-    parser.add_argument('--cfg',type=str,default='xmc_gan/cfg/concept_in_df_gan_sbert_n2_damsm.yml')
+    parser.add_argument('--cfg',type=str,default='xmc_gan/cfg/df_gan_sbert_seperate.yml')
     parser.add_argument('--gpu',dest = 'gpu_id', type=int, default=0)
     parser.add_argument('--seed',type=int,default=100)
     parser.add_argument('--resume_epoch',type=int,default=0)
@@ -185,7 +185,10 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             batch_size = mask.size(0)
 
             #### Train Discriminator
-            psent_embs = netG.proj_sent(sent_embs)
+            if cfg.DISC.SEPERATE:
+                psent_embs = sent_embs
+            else:
+                psent_embs = netG.proj_sent(sent_embs)
 
             real_features = netD(imgs)
             outputs_real = netD.COND_DNET(real_features, sent_embs = psent_embs.detach())
@@ -316,13 +319,6 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             writer.add_scalar('ds_loss',ds_loss.item(), epoch) if cfg.TRAIN.ENCODER_LOSS.SENT else None
             writer.add_scalar('gs_loss',gs_loss.item(), epoch) if cfg.TRAIN.ENCODER_LOSS.SENT else None
             writer.add_scalar('disc_loss',disc_loss.item(), epoch) if cfg.TRAIN.ENCODER_LOSS.DISC else None
-            
-        
-        torch.save(netG.state_dict(),f'{model_dir}/netG_{epoch:03d}.pth')
-        torch.save(netD.state_dict(),f'{model_dir}/netD_{epoch:03d}.pth')
-        torch.save(optimizerG.state_dict(),f'{model_dir}/optimizerG.pth')
-        torch.save(optimizerD.state_dict(),f'{model_dir}/optimizerD.pth')
-        logger.info('Save models')
 
         with torch.no_grad():
             netG.eval()
@@ -330,6 +326,11 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             vutils.save_image(fake.data,f'{img_dir}/fake_samples_epoch_{epoch:03d}.png',normalize=True,scale_each=True)
 
         if epoch > 50:
+            torch.save(netG.state_dict(),f'{model_dir}/netG_{epoch:03d}.pth')
+            torch.save(netD.state_dict(),f'{model_dir}/netD_{epoch:03d}.pth')
+            torch.save(optimizerG.state_dict(),f'{model_dir}/optimizerG.pth')
+            torch.save(optimizerD.state_dict(),f'{model_dir}/optimizerD.pth')
+            logger.info('Save models')
             eval(loader = test_loader, state_epoch = epoch, text_encoder = text_encoder, netG = netG, logger = logger, num_samples=6000)
 
 

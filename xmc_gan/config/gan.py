@@ -64,6 +64,7 @@ __C.DISC.UNCOND = True
 __C.DISC.COND = True
 __C.DISC.SENT_MATCH = False
 __C.DISC.IMG_MATCH = False
+__C.DISC.SEPERATE = False
 
 __C.IMG = edict()
 __C.IMG.SIZE = 64

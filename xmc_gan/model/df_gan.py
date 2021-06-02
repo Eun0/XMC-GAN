@@ -136,18 +136,22 @@ class D_GET_LOGITS(nn.Module):
         super(D_GET_LOGITS, self).__init__()
 
         nef = cfg.TRAIN.NEF
-        self.sent_match = cfg.DISC.SENT_MATCH
+        text_dim = cfg.TEXT.EMBEDDING_DIM
+        #self.sent_match = cfg.DISC.SENT_MATCH
         self.img_match = cfg.DISC.IMG_MATCH
 
-        if self.sent_match:
-            self.proj_match = linear(nef, ndf * 16, spec_norm=spec_norm)
+        if self.img_match:
+            self.proj_match = linear(ndf * 16, nef, spec_norm=spec_norm) # image
+            cond_dim = nef
+        elif cfg.DISC.SENT_MATCH:
+            self.proj_match = linear(nef, ndf * 16, spec_norm=spec_norm) # sent
             cond_dim = ndf * 16
-        elif self.img_match:
-            self.proj_match = linear(ndf * 16, nef, spec_norm=spec_norm)
+        elif cfg.DISC.SEPERATE and (text_dim != nef):
+            self.proj_match = linear(text_dim, nef, spec_norm=spec_norm) # sent
             cond_dim = nef
         else:
             self.proj_match = nn.Identity()
-            cond_dim = nef
+            cond_dim = text_dim
 
         self.joint_conv = nn.Sequential(
             conv2d_nxn(in_dim = ndf * 16 + cond_dim, out_dim = ndf * 2, kernel_size = 3, stride = 1, padding = 1, bias = False, spec_norm = spec_norm),
@@ -160,10 +164,10 @@ class D_GET_LOGITS(nn.Module):
         # sent_embs [bs, nef]
         out = F.avg_pool2d(x, kernel_size = 4)
         out = out.view(x.size(0), -1) # [bs, ndf*16] # for text-img contrastive learning
-        if self.sent_match:
-            sent_embs = self.proj_match(sent_embs) # [bs, ndf * 16] # for text-img contrastive learning
-        else:
+        if self.img_match:
             out = self.proj_match(out) # [bs, nef] # for text-img contrastive learning
+        else:
+            sent_embs = self.proj_match(sent_embs) # [bs, ndf * 16] for text-img contrastive learning or [bs, nef]
         
         c = sent_embs.view(sent_embs.size(0), -1, 1, 1)
         c = c.repeat(1, 1, 4, 4)
