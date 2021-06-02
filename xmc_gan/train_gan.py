@@ -51,7 +51,7 @@ _DISC_ARCH = {#"XMC_DISC":XMC_DISC,
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train XMC-GAN')
-    parser.add_argument('--cfg',type=str,default='xmc_gan/cfg/df_gan_sbert_n2_damsm.yml')
+    parser.add_argument('--cfg',type=str,default='xmc_gan/cfg/concept_in_df_gan_sbert_n2_damsm.yml')
     parser.add_argument('--gpu',dest = 'gpu_id', type=int, default=0)
     parser.add_argument('--seed',type=int,default=100)
     parser.add_argument('--resume_epoch',type=int,default=0)
@@ -213,7 +213,7 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             if cfg.TRAIN.ENCODER_LOSS.SENT:
                 assert cfg.DISC.SENT_MATCH or cfg.DISC.IMG_MATCH
                 ds_loss = sent_loss(imgs = outputs_real[1], txts=outputs_real[2], labels = labels, b_global=cfg.TRAIN.ENCODER_LOSS.B_GLOBAL)
-                enc_loss += ds_loss  
+                enc_loss += cfg.TRAIN.SMOOTH.SENT * ds_loss  
             if cfg.TRAIN.ENCODER_LOSS.WORD:
                 raise NotImplementedError
                 enc_loss += word_loss
@@ -260,7 +260,7 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
                 enc_loss = 0.0
                 if cfg.TRAIN.ENCODER_LOSS.SENT:
                     gs_loss = sent_loss(imgs = outputs[1], txts=outputs[2], labels = labels, b_global=cfg.TRAIN.ENCODER_LOSS.B_GLOBAL)
-                    enc_loss += gs_loss
+                    enc_loss += cfg.TRAIN.SMOOTH.SENT * gs_loss
                 if cfg.TRAIN.ENCODER_LOSS.WORD:
                     raise NotImplementedError
                     enc_loss += word_loss
@@ -273,7 +273,7 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
                     fake_features = fake_features.view(batch_size, -1)
 
                     disc_loss = img_loss(real_imgs=real_features, fake_imgs=fake_features,labels=labels, b_global=cfg.TRAIN.ENCODER_LOSS.B_GLOBAL)
-                    enc_loss += disc_loss
+                    enc_loss += cfg.TRAIN.SMOOTH.DISC * disc_loss
                 if cfg.TRAIN.ENCODER_LOSS.VGG:
                     raise NotImplementedError
                     enc_loss += vgg_loss

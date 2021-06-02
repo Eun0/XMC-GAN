@@ -72,9 +72,10 @@ class InNetG(nn.Module):
 
         init_size = (8 * self.ngf) * 4 * 4
         self.proj_noise = nn.Linear(noise_dim, init_size)
-        self.b_proj = (cfg.TEXT.EMBEDDING_DIM != cfg.TRAIN.NEF)
-        if self.b_proj:
-            self.proj_sent = nn.Linear(cfg.TEXT.EMBEDDING_DIM, cfg.TRAIN.NEF)
+        
+        self.proj_sent = nn.Linear(cfg.TEXT.EMBEDDING_DIM, cfg.TRAIN.NEF) if (cfg.TEXT.EMBEDDING_DIM != cfg.TRAIN.NEF) \
+                    else nn.Identity()
+
         self.upblocks = nn.ModuleList(
             [ICAttnG_Block(in_dim = arch['in_channels'][i],
                     out_dim = arch['out_channels'][i],
@@ -90,8 +91,8 @@ class InNetG(nn.Module):
         )
 
     def forward(self, noise, sent_embs, **kwargs):
-        if self.b_proj:
-            sent_embs = self.proj_sent(sent_embs)
+        
+        sent_embs = self.proj_sent(sent_embs)
 
         out = self.proj_noise(noise)
         out = out.view(out.size(0), 8 * self.ngf, 4, 4) # [bs,8*ngf,4,4]
@@ -121,8 +122,8 @@ class ICAttnG_Block(nn.Module):
         self.concept2 = InConceptBlock(in_dim = out_dim, cardinality=cardinality, bottleneck_width=bottleneck_width, 
                                     state_dim=state_dim, cond_dim=cond_dim, normalize=normalize)
 
-        self.conv_out1 = nn.Conv2d(group_width, out_dim, 1, 1, 0)
-        self.conv_out2 = nn.Conv2d(group_width, out_dim, 1, 1, 0)
+        self.conv_out1 = nn.Conv2d(group_width, out_dim, 3, 1, 1)
+        self.conv_out2 = nn.Conv2d(group_width, out_dim, 3, 1, 1)
 
         self.gamma = nn.Parameter(torch.zeros(1))
         if self.learnable_sc:
@@ -304,7 +305,7 @@ class ConceptReasoner(nn.Module):
     def __init__(self, cardinality, state_dim , spec_norm=False, normalize=True):
         super(ConceptReasoner,self).__init__()
         self.cardinality = cardinality
-        self.normalize = normalize
+        self.normalize = False
         self.proj_edge = linear(state_dim, cardinality, bias=False, spec_norm=spec_norm)
         if self.normalize:
             self.bn = nn.BatchNorm1d(num_features=cardinality)
@@ -334,9 +335,9 @@ class OutNetG(nn.Module):
 
         init_size = (8 * self.ngf) * 4 * 4
         self.proj_noise = nn.Linear(noise_dim, init_size)
-        self.b_proj = (cfg.TEXT.EMBEDDING_DIM != cfg.TRAIN.NEF)
-        if self.b_proj:
-            self.proj_sent = nn.Linear(cfg.TEXT.EMBEDDING_DIM, cfg.TRAIN.NEF)
+        self.proj_sent = nn.Linear(cfg.TEXT.EMBEDDING_DIM, cfg.TRAIN.NEF) if (cfg.TEXT.EMBEDDING_DIM != cfg.TRAIN.NEF) \
+                    else nn.Identity()
+
         self.upblocks = nn.ModuleList(
             [OCAG_Block(in_dim = arch['in_channels'][i],
                     out_dim = arch['out_channels'][i],
@@ -352,8 +353,8 @@ class OutNetG(nn.Module):
         )
 
     def forward(self, noise, sent_embs, **kwargs):
-        if self.b_proj:
-            sent_embs = self.proj_sent(sent_embs)
+        
+        sent_embs = self.proj_sent(sent_embs)
             
         out = self.proj_noise(noise)
         out = out.view(out.size(0), 8 * self.ngf, 4, 4) # [bs,8*ngf,4,4]
@@ -375,7 +376,6 @@ class OCAG_Block(nn.Module):
         self.upsample = upsample
         self.cardinality = cardinality
         
-
         group_width = cardinality * bottleneck_width
         state_dim = 4
 
@@ -584,6 +584,7 @@ class ConceptSampler(nn.Module):
 class NetD(nn.Module):
     def __init__(self, cfg, **kwargs):
         super(NetD, self).__init__()
+        raise NotImplementedError
         ndf = cfg.TRAIN.NCH
         spec_norm = cfg.DISC.SPEC_NORM
 
