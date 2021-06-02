@@ -6,3 +6,4 @@ data
 **.txt
 **.json
 wandb
+events.**
