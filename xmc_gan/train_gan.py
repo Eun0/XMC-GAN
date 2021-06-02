@@ -24,12 +24,12 @@ from sentence_transformers import util
 from xmc_gan.config.gan import cfg, cfg_from_file 
 from xmc_gan.dataset import WordTextDataset, SentTextDataset, index_to_sent 
 from xmc_gan.model.encoder import RNN_ENCODER, SBERT_ENCODER
-from xmc_gan.model.xmc_gan import NetG as XMC_GEN, NetD as XMC_DISC
+#from xmc_gan.model.xmc_gan import NetG as XMC_GEN, NetD as XMC_DISC
 from xmc_gan.model.df_gan import NetG as DF_GEN, NetD as DF_DISC
 from xmc_gan.model.df_concept_gan import InNetG as CONCEPT_IN_DF_GEN, OutNetG as CONCEPT_OUT_DF_GEN, NetD as CONCEPT_NETD
-from xmc_gan.model.xmc_gan_proj_text import OutNetG as XMC_PROJT_OUT_GEN, InNetG as XMC_PROJT_IN_GEN
-from xmc_gan.model.concept_gan import InNetG as CONCEPT_INATTN_GEN, OutNetG as CONCEPT_OUTATTN_GEN
-from xmc_gan.model.concept_deep_gan import InNetG as DEEP_CONCEPT_INATTN_GEN, OutNetG as DEEP_CONCEPT_OUTATTN_GEN
+#from xmc_gan.model.xmc_gan_proj_text import OutNetG as XMC_PROJT_OUT_GEN, InNetG as XMC_PROJT_IN_GEN
+#from xmc_gan.model.concept_gan import InNetG as CONCEPT_INATTN_GEN, OutNetG as CONCEPT_OUTATTN_GEN
+#from xmc_gan.model.concept_deep_gan import InNetG as DEEP_CONCEPT_INATTN_GEN, OutNetG as DEEP_CONCEPT_OUTATTN_GEN
 from xmc_gan.utils.logger import setup_logger
 from xmc_gan.utils.miscc import count_params
 
@@ -39,16 +39,19 @@ multiprocessing.set_start_method('spawn',True)
 
 _TEXT_DATASET = {"WORD":WordTextDataset, "SENT":SentTextDataset, }
 _TEXT_ARCH = {"RNN":RNN_ENCODER, "SBERT":SBERT_ENCODER, }
-_GEN_ARCH = {"XMC_GEN":XMC_GEN, "DF_GEN":DF_GEN, "XMC_PROJT_OUT_GEN":XMC_PROJT_OUT_GEN, "XMC_PROJT_IN_GEN":XMC_PROJT_IN_GEN, 
-            "CONCEPT_INATTN_GEN":CONCEPT_INATTN_GEN, "CONCEPT_OUTATTN_GEN":CONCEPT_OUTATTN_GEN,
-            "DEEP_CONCEPT_INATTN_GEN":DEEP_CONCEPT_INATTN_GEN, "DEEP_CONCEPT_OUTATTN_GEN":DEEP_CONCEPT_OUTATTN_GEN,
+_GEN_ARCH = {#"XMC_GEN":XMC_GEN, "XMC_PROJT_OUT_GEN":XMC_PROJT_OUT_GEN, "XMC_PROJT_IN_GEN":XMC_PROJT_IN_GEN,
+            "DF_GEN":DF_GEN,
+            #"CONCEPT_INATTN_GEN":CONCEPT_INATTN_GEN, "CONCEPT_OUTATTN_GEN":CONCEPT_OUTATTN_GEN,
+            #"DEEP_CONCEPT_INATTN_GEN":DEEP_CONCEPT_INATTN_GEN, "DEEP_CONCEPT_OUTATTN_GEN":DEEP_CONCEPT_OUTATTN_GEN,
             "CONCEPT_IN_DF_GEN":CONCEPT_IN_DF_GEN, "CONCEPT_OUT_DF_GEN":CONCEPT_OUT_DF_GEN, }
-_DISC_ARCH = {"XMC_DISC":XMC_DISC, "DF_DISC":DF_DISC, "CONCEPT_NETD":CONCEPT_NETD, }
+_DISC_ARCH = {#"XMC_DISC":XMC_DISC, 
+                "DF_DISC":DF_DISC, 
+                "CONCEPT_NETD":CONCEPT_NETD, }
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train XMC-GAN')
-    parser.add_argument('--cfg',type=str,default='xmc_gan/cfg/concept_outattn_gan.yml')
+    parser.add_argument('--cfg',type=str,default='xmc_gan/cfg/df_gan_sbert_n2_damsm.yml')
     parser.add_argument('--gpu',dest = 'gpu_id', type=int, default=0)
     parser.add_argument('--seed',type=int,default=100)
     parser.add_argument('--resume_epoch',type=int,default=0)
@@ -59,45 +62,80 @@ def parse_args():
     return args
 
 
+def weight_init(m):
+    if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.Linear):
+        torch.nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+        if m.bias is not None:
+            torch.nn.init.constant_(m.bias, 0)
+
+
 def make_labels(batch_size, sent_embs, b_global, p = 0.6):
 
     labels = torch.diag(torch.ones(batch_size)).cuda()
     if b_global:
-        sim_mat = sent_scores(sent_embs,sent_embs) # [bs, bs]
+        sim_mat = cosine_scores(sent_embs,sent_embs) # [bs, bs]
         sim_mat.fill_diagonal_(3)
         global_pos = (sim_mat > p) & (sim_mat < 3)
         num_pos = (global_pos > 0).sum(1).clamp_(min=1) + 1
-        labels = (labels +  torch.reciprocal(num_pos.float()) * global_pos).clamp_(max = 1)
+        global_weight = cfg.TRAIN.SMOOTH.GLOBAL if (cfg.TRAIN.SMOOTH.GLOBAL != 0.) \
+                    else torch.reciprocal(num_pos.float())
+        labels = (labels +  global_weight * global_pos).clamp_(max = 1)
     return labels.detach()
 
-def sent_scores(emb0, emb1):
+def cosine_scores(emb0, emb1):
     # [bs, D]
     # [bs, D]
-    emb0 = torch.nn.functional.normalize(emb0, p=2, dim=1)
-    emb1 = torch.nn.functional.normalize(emb1, p=2, dim=1)
+    emb0 = F.normalize(emb0, p=2, dim=1)
+    emb1 = F.normalize(emb1, p=2, dim=1)
     scores = torch.mm(emb0, emb1.transpose(0,1))
     return scores
 
 def sent_loss(imgs, txts, labels, b_global):
-    #labels = labels.detach()
-    scores = sent_scores(imgs, txts) # [bs(imgs), bs(txts)]
+    if not b_global:
+        num_pos = 1
+    elif cfg.TRAIN.SMOOTH.GLOBAL == 0.:
+        num_pos = 2
+    else:
+        num_pos = (labels > 0).sum(1)
+    
+    scores = cosine_scores(imgs, txts) # [bs(imgs), bs(txts)]
 
-    #num_pos = (labels > 0).sum(1)
-    num_pos = 1 if not b_global else 2
-    s = F.log_softmax(scores, dim=1) # [bs, bs]
-    s = s * labels # [bs, bs]
-    s = - (s.sum(1)) / num_pos
-    loss = s.mean()
+    s0 = F.log_softmax(scores, dim=0) # [bs(imgs), bs]
+    s0 = s0 * labels # [bs, bs]
+    s0 = - (s0.sum(0)) / num_pos
+    s0 = s0.mean()
+    
+    s1 = F.log_softmax(scores, dim=1) # [bs, bs(txts)]
+    s1 = s1 * labels
+    s1 = - (s1.sum(1)) / num_pos
+    s1 = s1.mean()
+
+    loss = s0 + s1
+
     return loss
 
 def img_loss(real_imgs, fake_imgs, labels, b_global):
-    #labels = labels.detach()
-    num_pos = 1 if not b_global else 2
-    scores = sent_scores(real_imgs, fake_imgs) # [bs(real),bs(fake)]
-    i = F.log_softmax(scores, dim=1) # [bs, bs]
-    i = i * labels #[bs,bs]
-    i = -(i.sum(1)) / num_pos
-    loss = i.mean()
+    if not b_global:
+        num_pos = 1
+    elif cfg.TRAIN.SMOOTH.GLOBAL == 0.:
+        num_pos = 2
+    else:
+        num_pos = (labels > 0).sum(1)
+
+    scores = cosine_scores(real_imgs, fake_imgs) # [bs(real),bs(fake)]
+    
+    i0 = F.log_softmax(scores, dim=0) # [bs(real), bs]
+    i0 = i0 * labels #[bs,bs]
+    i0 = -(i0.sum(0)) / num_pos
+    i0 = i0.mean()
+
+    i1 = F.log_softmax(scores, dim=1) # [bs, bs(fake)]
+    i1 = i1 * labels #[bs,bs]
+    i1 = -(i1.sum(1)) / num_pos
+    i1 = i1.mean()
+
+    loss = i0 + i1
+
     return loss
 
 
@@ -109,7 +147,11 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
     texts = texts_lst[0]
     caps = texts[0]
     sents = index_to_sent(train_set.i2w, caps) if cfg.TEXT.TYPE == 'WORD' else caps
-    torch.save(sents,f'{img_dir}/sents.pt')
+
+    with open(f'{img_dir}/sents.txt', 'w') as f:
+        for s in sents:
+            f.write(f'{s} \n')
+    
     cap_lens = texts[1]
     fixed_noise = torch.randn(cap_lens.size(0), cfg.TRAIN.NOISE_DIM).cuda().detach()
     fixed_words,fixed_sents,fixed_masks = text_encoder(caps,cap_lens)
@@ -117,8 +159,9 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
 
     vutils.save_image(imgs.data, f'{img_dir}/imgs.png', normalize=True, scale_each=True)
 
-    #wandb.watch(netG,log_freq=cfg.TRAIN.LOG_INTERVAL)
-    #wandb.watch(netD,log_freq=cfg.TRAIN.LOG_INTERVAL)
+    if args.log_type == 'wdb':
+        wandb.watch(netG,log_freq=cfg.TRAIN.LOG_INTERVAL)
+        wandb.watch(netD,log_freq=cfg.TRAIN.LOG_INTERVAL)
 
     i = 0
     log_dict = {}
@@ -142,9 +185,10 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             batch_size = mask.size(0)
 
             #### Train Discriminator
+            psent_embs = netG.proj_sent(sent_embs)
 
             real_features = netD(imgs)
-            outputs_real = netD.COND_DNET(real_features, sent_embs = sent_embs)
+            outputs_real = netD.COND_DNET(real_features, sent_embs = psent_embs.detach())
             errD_real = F.relu(1.0 - outputs_real[0], inplace=True).mean()
             
             noise = torch.randn(batch_size, cfg.TRAIN.NOISE_DIM)
@@ -153,13 +197,13 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
 
             fake_features = netD(fake.detach())
 
-            outputs_fake = netD.COND_DNET(fake_features, sent_embs = sent_embs)
+            outputs_fake = netD.COND_DNET(fake_features, sent_embs = psent_embs.detach())
             errD_fake = F.relu(1.0 + outputs_fake[0], inplace=True).mean()
             mis_loss = errD_fake
             
             if cfg.TRAIN.RMIS_LOSS:
-                outputs_mis = netD.COND_DNET(real_features[:(batch_size-1)], sent_embs = sent_embs[1:batch_size])
-                errD_mismatch = F.relu(1.0 + outputs_mis[0],inplace=True).mean()
+                outputs_mis = netD.COND_DNET(real_features[:(batch_size-1)], sent_embs = psent_embs[1:batch_size].detach())
+                errD_mismatch = F.relu(1.0 + outputs_mis[0], inplace=True).mean()
                 mis_loss += errD_mismatch
             
             if cfg.TRAIN.ENCODER_LOSS.SENT or cfg.TRAIN.ENCODER_LOSS.WORD or cfg.TRAIN.ENCODER_LOSS.DISC or cfg.TRAIN.ENCODER_LOSS.VGG:
@@ -167,6 +211,7 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             
             enc_loss = 0.
             if cfg.TRAIN.ENCODER_LOSS.SENT:
+                assert cfg.DISC.SENT_MATCH or cfg.DISC.IMG_MATCH
                 ds_loss = sent_loss(imgs = outputs_real[1], txts=outputs_real[2], labels = labels, b_global=cfg.TRAIN.ENCODER_LOSS.B_GLOBAL)
                 enc_loss += ds_loss  
             if cfg.TRAIN.ENCODER_LOSS.WORD:
@@ -183,7 +228,7 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             if cfg.TRAIN.MAGP:
                
                 interpolated = (imgs.data).requires_grad_()
-                sent_inter = (sent_embs.data).requires_grad_()
+                sent_inter = (psent_embs.data).requires_grad_()
                 features = netD(interpolated)
                 out = netD.COND_DNET(features,sent_inter)
                 grads = torch.autograd.grad(outputs=out[0],
@@ -209,7 +254,7 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
                 #del fake_features
         
                 features = netD(fake)
-                outputs = netD.COND_DNET(features, sent_embs = sent_embs)
+                outputs = netD.COND_DNET(features, sent_embs = psent_embs)
                 errG_fake = - outputs[0].mean()
                 
                 enc_loss = 0.0
@@ -223,7 +268,11 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
                     real_features = netD(imgs).detach()
                     real_features = F.avg_pool2d(real_features, kernel_size = 4)
                     real_features = real_features.view(batch_size, -1)
-                    disc_loss = img_loss(real_imgs=real_features, fake_imgs=outputs[1],labels=labels, b_global=cfg.TRAIN.ENCODER_LOSS.B_GLOBAL)
+
+                    fake_features = F.avg_pool2d(features, kernel_size = 4)
+                    fake_features = fake_features.view(batch_size, -1)
+
+                    disc_loss = img_loss(real_imgs=real_features, fake_imgs=fake_features,labels=labels, b_global=cfg.TRAIN.ENCODER_LOSS.B_GLOBAL)
                     enc_loss += disc_loss
                 if cfg.TRAIN.ENCODER_LOSS.VGG:
                     raise NotImplementedError
@@ -237,13 +286,13 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
                 optimizerG.step()
 
                 i = 0
-                log = f'[{epoch}/{cfg.TRAIN.MAX_EPOCH}][{step}/{len(train_loader)}] Loss_D: {errD.item():.3f} Loss_G: {errG.item():.3f} errD_real: {errD_real.item():.3f} errD_fake: {errD_fake.item():.3f} '
+                log = f'[{epoch}/{cfg.TRAIN.MAX_EPOCH}][{step+1}/{len(train_loader)}] Loss_D: {errD.item():.3f} Loss_G: {errG.item():.3f} errD_real: {errD_real.item():.3f} errD_fake: {errD_fake.item():.3f} '
                 logger.info(log)
 
             #torch.cuda.empty_cache()
 
             if (step + 1) % cfg.TRAIN.LOG_INTERVAL == 0:
-                vutils.save_image(fake.data,f'{img_dir}/fake_samples_{step:03d}.png',normalize=True,scale_each=True)
+                vutils.save_image(fake.data,f'{img_dir}/fake_samples_{step+1:03d}.png',normalize=True,scale_each=True)
                 
         if args.log_type == 'wdb':
             log_dict.clear()
@@ -280,7 +329,8 @@ def train(train_loader, test_loader, state_epoch, text_encoder, netG, netD, opti
             fake = netG(fixed_noise, fixed_sents, words_embs = fixed_words, mask = fixed_masks)
             vutils.save_image(fake.data,f'{img_dir}/fake_samples_epoch_{epoch:03d}.png',normalize=True,scale_each=True)
 
-        eval(loader = test_loader, state_epoch = epoch, text_encoder = text_encoder, netG = netG, logger = logger, num_samples=6000)
+        if epoch > 50:
+            eval(loader = test_loader, state_epoch = epoch, text_encoder = text_encoder, netG = netG, logger = logger, num_samples=6000)
 
 
 
@@ -421,6 +471,10 @@ if __name__ == '__main__':
 
     netG = g_arch(cfg).cuda()
     netD = d_arch(cfg, is_disc = True).cuda()
+
+    if cfg.TRAIN.HE_INIT:
+        netG.apply(weight_init)
+        netD.apply(weight_init)
 
     logger.info(f'netG # of parameters: {count_params(netG)}')
     logger.info(f'netD # of parameters: {count_params(netD)}')

@@ -1,4 +1,4 @@
-CONFIG_NAME: 'CONCEPT_OUTATTN_GEN'
+CONFIG_NAME: 'DF_GAN_SBERT_N2'
 DATASET_NAME: 'coco'
 
 TRAIN:
@@ -8,21 +8,26 @@ TRAIN:
   NUM_WORKERS: 8
   LOG_INTERVAL: 200
   SAVE_INTERVAL: 1
-  N_CRITIC: 1
-  
+  N_CRITIC: 2
+
+  HE_INIT: True
+
   NEF: 256
   NCH: 32
   NOISE_DIM: 100
 
   RMIS_LOSS: True
-  MAGP: False
+  MAGP: True
 
   ENCODER_LOSS:
     B_GLOBAL: False
-    SENT: True
+    SENT: False
     WORD: False
-    DISC: True
+    DISC: False
     VGG: False
+
+  SMOOTH:
+    GLOBAL: 0. # if 0 adaptive 
 
   OPT:
     G_LR: 0.0001
@@ -33,16 +38,16 @@ TRAIN:
     D_BETA2: 0.9
 
 GEN:
-  ENCODER_NAME: 'CONCEPT_OUTATTN_GEN'
-  NORMALIZE: False
+  ENCODER_NAME: 'DF_GEN'
+  NORMALIZE: True
 
 DISC:
-  ENCODER_NAME: 'XMC_DISC'
+  ENCODER_NAME: 'DF_DISC'
   ENCODER_DIR: ''
-  SPEC_NORM: True
-  COND: True
-  UNCOND: True
-  SENT_MATCH: True
+  SPEC_NORM: False 
+  UNCOND: False
+  SENT_MATCH: False # for contrastive learning
+  IMG_MATCH: False  # for contrastive learning
 
 IMG:
   SIZE: 64
@@ -50,12 +55,12 @@ IMG:
 TEXT:
   TYPE: 'SENT' #'WORD' # 'SENT'
   CAPTIONS_PER_IMAGE: 5
-  MAX_LENGTH: 15
+  MAX_LENGTH: 20
   VOCA_SIZE: 27297
 
   ENCODER_NAME: 'SBERT' #'RNN' # 'SBERT'
-  ENCODER_DIR: ''       #'data/DAMSMencoders/coco/text_encoder100.pth'
-  EMBEDDING_DIM: 768
+  ENCODER_DIR: ''    #''   #'data/DAMSMencoders/coco/text_encoder100.pth'
+  EMBEDDING_DIM: 768 #256  #768
   NUM_LAYERS: 1
   #RNN_TYPE: 'LSTM'
 

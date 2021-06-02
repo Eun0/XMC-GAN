@@ -67,7 +67,6 @@ class NetG(nn.Module):
         self.ngf = cfg.TRAIN.NCH
         noise_dim = cfg.TRAIN.NOISE_DIM
 
-        
         arch = gen_arch(img_size = cfg.IMG.SIZE, nch = self.ngf)
 
         init_size = (8 * self.ngf) * 4 * 4
@@ -136,15 +135,16 @@ class D_GET_LOGITS(nn.Module):
     def __init__(self, cfg, ndf, spec_norm = False):
         super(D_GET_LOGITS, self).__init__()
 
-        text_dim = cfg.TEXT.EMBEDDING_DIM
         nef = cfg.TRAIN.NEF
+        self.sent_match = cfg.DISC.SENT_MATCH
+        self.img_match = cfg.DISC.IMG_MATCH
 
-        if cfg.DISC.SENT_MATCH:
-            self.proj_match = linear(text_dim, ndf * 16, spec_norm=spec_norm)
+        if self.sent_match:
+            self.proj_match = linear(nef, ndf * 16, spec_norm=spec_norm)
             cond_dim = ndf * 16
-        elif text_dim != nef:
-            self.proj_match = linear(text_dim, nef, spec_norm=spec_norm)
-            cond_dim = nef 
+        elif self.img_match:
+            self.proj_match = linear(ndf * 16, nef, spec_norm=spec_norm)
+            cond_dim = nef
         else:
             self.proj_match = nn.Identity()
             cond_dim = nef
@@ -156,8 +156,14 @@ class D_GET_LOGITS(nn.Module):
         )
 
     def forward(self, x, sent_embs, **kwargs):
-        out = F.adaptive_avg_pool2d(x, 1).view(x.size(0),x.size(1))
-        sent_embs = self.proj_match(sent_embs)
+        # x [bs, ndf*16, 4, 4]
+        # sent_embs [bs, nef]
+        out = F.avg_pool2d(x, kernel_size = 4)
+        out = out.view(x.size(0), -1) # [bs, ndf*16] # for text-img contrastive learning
+        if self.sent_match:
+            sent_embs = self.proj_match(sent_embs) # [bs, ndf * 16] # for text-img contrastive learning
+        else:
+            out = self.proj_match(out) # [bs, nef] # for text-img contrastive learning
         
         c = sent_embs.view(sent_embs.size(0), -1, 1, 1)
         c = c.repeat(1, 1, 4, 4)

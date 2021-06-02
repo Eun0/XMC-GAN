@@ -7,7 +7,7 @@ from easydict import EasyDict as edict
 __C = edict()
 cfg = __C
 
-__C.CONFIG_NAME = 'XNC_GAN'
+__C.CONFIG_NAME = ''
 __C.DATASET_NAME = 'coco'
 
 
@@ -20,7 +20,9 @@ __C.TRAIN.LOG_INTERVAL = 1
 __C.TRAIN.SAVE_INTERVAL = 1
 __C.TRAIN.N_CRITIC = 1
 
-__C.TRAIN.NEF = 256
+__C.TRAIN.HE_INIT = False
+
+__C.TRAIN.NEF = 128
 __C.TRAIN.NCH = 32
 __C.TRAIN.NOISE_DIM = 128
 
@@ -49,16 +51,17 @@ __C.TRAIN.OPT.D_BETA2 = 0.999
 
 
 __C.GEN = edict()
-__C.GEN.ENCODER_NAME = 'XMC_GEN'
+__C.GEN.ENCODER_NAME = ''
 __C.GEN.NORMALIZE = True
 
 __C.DISC = edict()
-__C.DISC.ENCODER_NAME = 'XMC_DISC'
+__C.DISC.ENCODER_NAME = ''
 __C.DISC.ENCODER_DIR = ''
 __C.DISC.SPEC_NORM = True
 __C.DISC.UNCOND = True
 __C.DISC.COND = True
 __C.DISC.SENT_MATCH = False
+__C.DISC.IMG_MATCH = False
 
 __C.IMG = edict()
 __C.IMG.SIZE = 64

@@ -7,3 +7,4 @@ data
 **.json
 wandb
 events.**
+**/old

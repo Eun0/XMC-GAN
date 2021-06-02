@@ -10,6 +10,8 @@ TRAIN:
   SAVE_INTERVAL: 1
   N_CRITIC: 1
 
+  HE_INIT: True
+
   NEF: 256
   NCH: 32
   NOISE_DIM: 100
@@ -24,6 +26,9 @@ TRAIN:
     DISC: False
     VGG: False
 
+  SMOOTH:
+    GLOBAL: 0. # if 0 adaptive 
+
   OPT:
     G_LR: 0.0001
     G_BETA1: 0.0
@@ -34,14 +39,15 @@ TRAIN:
 
 GEN:
   ENCODER_NAME: 'DF_GEN'
-  NORMALIZE: False
+  NORMALIZE: True
 
 DISC:
   ENCODER_NAME: 'DF_DISC'
   ENCODER_DIR: ''
   SPEC_NORM: False 
   UNCOND: False
-  SENT_MATCH: False
+  SENT_MATCH: False # for contrastive learning
+  IMG_MATCH: False  # for contrastive learning
 
 IMG:
   SIZE: 64
@@ -49,7 +55,7 @@ IMG:
 TEXT:
   TYPE: 'SENT' #'WORD' # 'SENT'
   CAPTIONS_PER_IMAGE: 5
-  MAX_LENGTH: 15
+  MAX_LENGTH: 20
   VOCA_SIZE: 27297
 
   ENCODER_NAME: 'SBERT' #'RNN' # 'SBERT'
